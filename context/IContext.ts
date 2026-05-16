@@ -7,6 +7,7 @@ export interface IContext {
   PREFIXES:           Prefixes;
   ACCOUNT:            string;
   REGION:             string;
+  VPC?:               VPC;
   DNS?:               DNS;
   S3PROXY:            S3Proxy;
   WORDPRESS:          Wordpress;
@@ -27,6 +28,10 @@ export interface DNS {
 export interface Cloudfront {
   challengeHeaderName: string;
   distributionDomainName?: string;
+}
+
+export interface VPC {
+  existingVpcId?: string;
 }
 
 export interface Redis {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { App, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
-import { IpAddresses, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { IpAddresses, IVpc, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { CustomResourceConfig } from 'aws-cdk-lib/custom-resources';
 import { IContext, SecretFieldNames } from '../context/IContext';
@@ -97,7 +97,7 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
 
   // Deconstruct the context
   const { 
-    ACCOUNT:account, REGION:region, STACK_ID, DNS,
+    ACCOUNT:account, REGION:region, STACK_ID, VPC, DNS,
     TAGS: { Service, Function, Landscape, CostCenter='', Ticket='' }, 
     PREFIXES: { wordpress:pfxWordpress, rds:pfxRds },
     WORDPRESS: { secret: { spSecretArn, wpSecretArn }}
@@ -124,7 +124,12 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
   const stack = new Stack(app, 'StandardStack', stackProps);
   const ipAddresses = IpAddresses.cidr('10.0.0.0/21');
   const availabilityZones = [ `${region}a`, `${region}b`];
-  const vpc: Vpc = new Vpc(stack, `${STACK_ID}-vpc`, { ipAddresses, availabilityZones }); 
+  
+  // VPC: Use existing VPC if specified, otherwise create new VPC with standard defaults
+  const vpc: IVpc = VPC?.existingVpcId 
+    ? Vpc.fromLookup(stack, `${STACK_ID}-vpc`, { vpcId: VPC.existingVpcId })
+    : new Vpc(stack, `${STACK_ID}-vpc`, { ipAddresses, availabilityZones });
+  
   const { hostedZone, certificateARN, cloudfront, cloudfront: {distributionDomainName='' } = {} } = DNS ?? {};
 
   // Define the RDS construct

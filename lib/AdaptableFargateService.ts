@@ -1,6 +1,6 @@
 import { Duration, Stack } from 'aws-cdk-lib';
 import { Schedule } from 'aws-cdk-lib/aws-applicationautoscaling';
-import { Peer, Port, SecurityGroup, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { IVpc, Peer, Port, SecurityGroup, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { ContainerDefinitionOptions, FargateTaskDefinition, FargateTaskDefinitionProps, ScalableTaskCount } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancedFargateService as albfs, ApplicationLoadBalancedFargateServiceProps as albfsp } from 'aws-cdk-lib/aws-ecs-patterns';
 import { Construct } from 'constructs';
@@ -28,7 +28,7 @@ export abstract class AdaptableConstruct extends Construct {
   context: IContext;
   _securityGroup: SecurityGroup;
 
-  vpc: Vpc;
+  vpc: IVpc;
   containerDefProps: ContainerDefinitionOptions;
   taskDefProps: FargateTaskDefinitionProps;
   fargateServiceProps: albfsp;
@@ -114,10 +114,12 @@ export abstract class AdaptableConstruct extends Construct {
 
     this._securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(6379), 'Allow inbound TCP traffic on the Redis port');
     
-    // Make a subnet group for the redis cluster.
+    // Redis doesn't need internet access, so prefer isolated subnets when available.
+    // Falls back to private subnets for VPC topologies without isolated subnets.
+    const redisSubnets = vpc.isolatedSubnets.length > 0 ? vpc.isolatedSubnets : vpc.privateSubnets;
     const redisSubnetGroup = new CfnSubnetGroup(this, `${id}-redis-subnet-group`, {
       description: 'Subnet group for the redis cluster.',
-      subnetIds: vpc.privateSubnets.map( subnet => subnet.subnetId ),
+      subnetIds: redisSubnets.map( subnet => subnet.subnetId ),
       cacheSubnetGroupName: `${id}-${Landscape}-redis-sg`,
     });
 
