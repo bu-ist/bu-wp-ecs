@@ -1,4 +1,3 @@
-import * as contextJSON from '../context/context.json';
 import { IContext, SecretFieldNames } from "../context/IContext";
 import { SecretsManagerSecret } from "../lib/Secret";
 
@@ -10,6 +9,39 @@ import { SecretsManagerSecret } from "../lib/Secret";
  * The goal here is to make secrets that survive stack deletion.
  */
 export const createOrUpdateSecrets = async () => {
+  // Parse command-line arguments: env=<name>, LANDSCAPE=<value>, SECRET_NAME=<value>
+  const args = process.argv.slice(1);
+  let envName = '';
+  let landscapeOverride = '';
+  let secretNameOverride = '';
+  
+  args.forEach((arg) => {
+    const [key, value] = arg.split('=');
+    const keyUpper = key.trim().toUpperCase();
+    const keyLower = key.trim().toLowerCase();
+    
+    if (keyLower === 'env') {
+      envName = value;
+    } else if (keyUpper === 'LANDSCAPE') {
+      landscapeOverride = value;
+    } else if (keyUpper === 'SECRET_NAME') {
+      secretNameOverride = value;
+    }
+  });
+  
+  // Load context file based on env=<name> argument, defaulting to context.json
+  const contextFileName = envName ? `context-${envName}` : 'context';
+  let contextJSON: unknown;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    contextJSON = require(`../context/${contextFileName}.json`);
+  } catch (err) {
+    console.error(`Failed to load context file: context/${contextFileName}.json`);
+    if (err instanceof Error) {
+      console.error(err.message);
+    }
+    process.exit(1);
+  }
   const context = contextJSON as IContext;
 
   const { 
@@ -17,9 +49,15 @@ export const createOrUpdateSecrets = async () => {
       secret: { fieldNames: { configExtra, dbPassword } }, env: { dbUser } 
     } } = context;
 
-  // Landscape can be overridden by env variable LANDSCAPE.
+  // Landscape can be overridden by LANDSCAPE= argument
   let { TAGS: { Landscape } } = context;
-
+  if (landscapeOverride) {
+    console.log(`Overriding Landscape tag from ${Landscape} from context to ${landscapeOverride} from argument`);
+    Landscape = landscapeOverride;
+  }
+  if (secretNameOverride) {
+    console.log(`Overriding entire secret name to ${secretNameOverride} from argument`);
+  }
 
   const { WORDPRESS_CONFIG_EXTRA, DB_PASSWORD } = process.env;
 
@@ -30,20 +68,6 @@ export const createOrUpdateSecrets = async () => {
   if( ! DB_PASSWORD ) {
     throw new Error('DB_PASSWORD environment variable must be set');
   }
-
-  const args = process.argv.slice(1);
-  let secretNameOverride = '';
-  args.forEach((arg) => {
-    const [key, value] = arg.split('=');
-    if( key.trim().toUpperCase() === 'LANDSCAPE' ) {
-      console.log(`Overriding Landscape tag from ${Landscape} from context to ${value} from argument`);
-      Landscape = value;
-    }
-    if( key.trim().toUpperCase() === 'SECRET_NAME' ) {
-      console.log(`Overriding entire secret name to ${value} from argument`);
-      secretNameOverride = value;
-    }
-  });
 
   const secretName = secretNameOverride || `${STACK_ID}/${Landscape}`;
   const fldNames = { configExtra, dbPassword, spCert: 'N/A', spKey: 'N/A' } satisfies SecretFieldNames;

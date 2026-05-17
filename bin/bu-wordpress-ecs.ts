@@ -4,7 +4,6 @@ import { IpAddresses, IVpc, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { CustomResourceConfig } from 'aws-cdk-lib/custom-resources';
 import { IContext, SecretFieldNames } from '../context/IContext';
-import * as ctx from '../context/context.json';
 import { checkIamServerCertificate } from '../lib/Certificate';
 import { ContextLog } from '../context/ContextLog';
 import { BuWordpressRdsConstruct as RdsConstruct } from '../lib/Rds';
@@ -91,6 +90,20 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
   CustomResourceConfig.of(app).addRemovalPolicy(RemovalPolicy.DESTROY);
   CustomResourceConfig.of(app).addLogRetentionLifetime(RetentionDays.ONE_WEEK);
 
+  // Load context file based on -c env=<name> parameter, defaulting to context.json
+  const envName = app.node.tryGetContext('env');
+  const contextFileName = envName ? `context-${envName}` : 'context';
+  let ctx: unknown;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ctx = require(`../context/${contextFileName}.json`);
+  } catch (err) {
+    console.error(`Failed to load context file: context/${contextFileName}.json`);
+    if (err instanceof Error) {
+      console.error(err.message);
+    }
+    process.exit(1);
+  }
   const context = ctx as IContext;
   
   app.node.setContext('stack-parms', context);
