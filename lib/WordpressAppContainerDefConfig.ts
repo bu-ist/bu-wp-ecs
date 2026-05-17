@@ -69,6 +69,26 @@ export class WordpressAppContainerDefConfig {
     const {
       spSecretArn, wpSecretArn, fieldNames: { configExtra, dbPassword, spCert, spKey }
     } = wp.secret;
+
+    // Build secrets object conditionally based on deployment pattern
+    const secrets: Record<string, ecs.Secret> = {
+      WORDPRESS_CONFIG_EXTRA: ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, configExtra, wpSecretArn), configExtra),
+      WORDPRESS_DB_PASSWORD: ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, dbPassword, wpSecretArn), dbPassword),
+    };
+
+    // Only mount SP secrets for ALB-direct pattern (container mod_shib)
+    // Pattern: certificateARN present (not self-signed) BUT no CloudFront (Lambda@Edge would handle auth)
+    // CloudFront-fronted patterns use Lambda@Edge for SAML; self-signed has no auth
+    const requiresContainerModShib = context.DNS?.certificateARN && !context.DNS?.cloudfront;
+    
+    if (requiresContainerModShib) {
+      secrets.SHIB_SP_KEY = ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, spKey, spSecretArn), spKey);
+      secrets.SHIB_SP_CERT = ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, spCert, spSecretArn), spCert);
+    }
     
     return {
       image: ecs.ContainerImage.fromRegistry(wp.dockerImage),
@@ -93,17 +113,7 @@ export class WordpressAppContainerDefConfig {
         WORDPRESS_DB_USER, WORDPRESS_DB_NAME, WORDPRESS_DEBUG, WP_CLI_ALLOW_ROOT,
         WP_ENVIRONMENT_TYPE
       },
-      // https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html
-      secrets: {
-        WORDPRESS_CONFIG_EXTRA: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, configExtra, wpSecretArn), configExtra),
-        WORDPRESS_DB_PASSWORD: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, dbPassword, wpSecretArn), dbPassword),
-        SHIB_SP_KEY: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, spKey, spSecretArn), spKey),
-        SHIB_SP_CERT: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, spCert, spSecretArn), spCert),
-      }
+      secrets
     } as ecs.ContainerDefinitionOptions
   }
 }
