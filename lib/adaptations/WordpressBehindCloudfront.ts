@@ -1,15 +1,21 @@
 import { DescribeManagedPrefixListsCommand, DescribeManagedPrefixListsRequest, DescribeManagedPrefixListsResult, EC2Client } from "@aws-sdk/client-ec2";
 import { GetSecretValueCommand, GetSecretValueCommandOutput, SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 import { Stack } from "aws-cdk-lib";
+import { Certificate, ICertificate } from "aws-cdk-lib/aws-certificatemanager";
 import { CfnSecurityGroup, Peer, Port, SecurityGroup } from "aws-cdk-lib/aws-ec2";
 import { ApplicationListener, ApplicationLoadBalancer, ApplicationLoadBalancerProps, CfnListener, ListenerAction, ListenerCondition } from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import { ApplicationLoadBalancedFargateServiceProps, ApplicationLoadBalancedServiceRecordType } from "aws-cdk-lib/aws-ecs-patterns";
+import { HostedZone, IHostedZone } from "aws-cdk-lib/aws-route53";
+import { Route53HostedZone } from '../../bin/Route53';
 import { ParameterTester } from "../Utils";
 import { WordpressEcsConstruct } from "../Wordpress";
 import { WordpressAppContainerDefConfig } from "../WordpressAppContainerDefConfig";
 
 /**
- * A prexisting cloudfront distribution will be configured to "point" at the ALB created by this
- * stack as one of its origins. Requires wordpress fargate container to NOT redirect http to https).
+ * CloudFront-fronted WordPress deployment with Lambda@Edge SAML authentication.
+ * A pre-existing CloudFront distribution is configured to point at the ALB created by this
+ * stack as one of its origins. Optionally includes Route53 A record for custom domain.
+ * Container does NOT redirect HTTP to HTTPS (CloudFront handles TLS termination).
  */
 export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
 
@@ -17,6 +23,35 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
   
   constructor(baseline: Stack, id: string, props?: any) {
     super(baseline, id, props);
+  }
+
+  /**
+   * Enforce singleton pattern for hosted zone construct to avoid name collisions.
+   * Returns hosted zone if Route53 integration is configured.
+   */
+  private getDomainZone(): IHostedZone | undefined {
+    const { context: { DNS: { hostedZone:domainName = '', crossAccountHostedZoneId } = {} } } = this;
+    
+    // No hosted zone configured
+    if (!domainName) return undefined;
+    
+    // Return cached zone if already looked up
+    if (this.props.domainZone) return this.props.domainZone;
+    
+    // Cross-account hosted zone
+    if (crossAccountHostedZoneId) {
+      this.props.domainZone = HostedZone.fromHostedZoneId(
+        this, 
+        'CrossAccountZone', 
+        crossAccountHostedZoneId
+      ) satisfies IHostedZone;
+    }
+    // Same-account hosted zone lookup
+    else {
+      this.props.domainZone = HostedZone.fromLookup(this, 'Zone', { domainName }) satisfies IHostedZone;
+    }
+    
+    return this.props.domainZone;
   }
 
   adaptResourceProperties(): void {
@@ -53,6 +88,41 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
      */
     const sg = securityGroup.node.defaultChild as CfnSecurityGroup;
     sg.addPropertyDeletionOverride('SecurityGroupIngress');
+    
+    // Route53 integration (optional)
+    const { hostedZone, certificateARN:certArn = '', subdomain } = DNS || {};
+    if (hostedZone) {
+      // Bind getDomainZone to this context
+      this.getDomainZone = this.getDomainZone.bind(this);
+      
+      // Cannot proceed without a certificate for Route53 integration
+      if (!certArn) {
+        throw new Error('You must include an SSL certificate ARN if using Route53 with CloudFront');
+      }
+
+      // Look up the hosted zone and certificate
+      const domainZone = this.getDomainZone();
+      const certificate = Certificate.fromCertificateArn(this, `${id}-acm-cert`, certArn) satisfies ICertificate;
+
+      // Configure fargate service with Route53 integration
+      // Prevent CDK from automatically adding an A record to the hosted zone for the ALB
+      const recordType = ApplicationLoadBalancedServiceRecordType.NONE;
+
+      Object.assign(this.fargateServiceProps, { 
+        certificate, 
+        redirectHTTP: true,
+        recordType: recordType,
+        publicLoadBalancer: true,
+        loadBalancer: this.alb,
+      } as ApplicationLoadBalancedFargateServiceProps);
+
+      if (subdomain) {
+        Object.assign(this.fargateServiceProps, {
+          domainZone,
+          domainName: subdomain
+        } as ApplicationLoadBalancedFargateServiceProps);
+      }
+    }
   }
 
   adaptResources(): void {
@@ -91,6 +161,28 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
       StatusCode: '403'
     };
     defaultListener.addPropertyOverride('DefaultActions.0.FixedResponseConfig', fixedResponseConfig);
+    
+    // Route53 A record creation (optional, only if Route53 integration configured)
+    const { id, props: { ignoreRoute53 = false }, context: { DNS: { 
+      hostedZone, subdomain, cloudfront: { distributionDomainName = '' } = {} 
+    } = {} } } = this;
+    
+    if (hostedZone && !ignoreRoute53) {
+      if (!subdomain) {
+        console.warn('A subdomain was not provided; using root domain for hosted zone.');
+      }
+      
+      const route53HostedZone: Route53HostedZone = new Route53HostedZone(this.context);
+      route53HostedZone.createARecord({
+        scope: this,
+        id: `${id}-cloudfront-alias-record`,
+        distributionDomainName,
+        hostedZone,
+        recordName: subdomain ?? ''
+      });
+    } else if (hostedZone && ignoreRoute53) {
+      console.log(`Ignoring route53 record creation for subdomain ${subdomain} in hosted zone ${hostedZone}`);
+    }
   }
 }
 

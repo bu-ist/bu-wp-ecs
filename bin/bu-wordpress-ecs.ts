@@ -13,7 +13,7 @@ import { getStackName, logHeader } from '../lib/Utils';
 import { StandardWordpressConstruct, WordpressEcsConstruct } from '../lib/Wordpress';
 import { CloudfrontWordpressEcsConstruct, lookupCloudfrontHeaderChallenge, lookupCloudfrontPrefixListId } from '../lib/adaptations/WordpressBehindCloudfront';
 import { SelfSignedWordpressEcsConstruct } from '../lib/adaptations/WordpressSelfSigned';
-import { HostedZoneForALBWordpressEcsConstruct, HostedZoneForCloudfrontWordpressEcsConstruct } from '../lib/adaptations/WordpressWithHostedZone';
+import { ContainerModShibWordpressEcsConstruct } from '../lib/adaptations/WordpressWithHostedZone';
 import { Route53HostedZone } from './Route53';
 
 
@@ -152,38 +152,28 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
   let ecs:WordpressEcsConstruct;
 
   if( ! certificateARN) {
-    // Define an ECS construct that routes https via a self-signed iam certificate.
+    // Self-signed development pattern: IAM server certificate, no production auth
     ecs = new SelfSignedWordpressEcsConstruct(stack, wpId, { 
       vpc, rdsHostName, iamServerCertArn: (await checkIamServerCertificate())
     });
   }
-  else if(distributionDomainName && hostedZone) {
-    // Define an ECS construct that is routed to through a pre-existing cloudfront distribution via route53.
-    ecs = new HostedZoneForCloudfrontWordpressEcsConstruct({
-      baseline: stack,
-      id: wpId,
-      props: { 
-        vpc, 
-        rdsHostName, 
-        ignoreRoute53: await ignoreRoute53(context), 
-        ...(await lookupCloudfrontParameters(context)) 
-      },
-      distributionDomainName
-    });
-  }
-  else if(cloudfront && ! hostedZone) {
-    // Define an ECS construct that accepts traffic only from a pre-existing cloudfront distribution 
-    // on its default domain that is configured to route to the ALB created by the fargate construct.
+  else if(cloudfront) {
+    // CloudFront-fronted pattern: Lambda@Edge SAML authentication
+    // Handles both with and without Route53 (optional vanity domain)
     ecs = new CloudfrontWordpressEcsConstruct(stack, wpId, { 
-      vpc, rdsHostName, ...(await lookupCloudfrontParameters(context))
+      vpc, 
+      rdsHostName,
+      distributionDomainName,
+      ignoreRoute53: await ignoreRoute53(context), 
+      ...(await lookupCloudfrontParameters(context))
     });
   }
   else if(hostedZone) {
-    // Define an ECS construct that routes through the auto-created ALB of the fargate construct via route53.
-    ecs = new HostedZoneForALBWordpressEcsConstruct(stack, wpId, { vpc, rdsHostName });
+    // Container mod_shib pattern: temporary escape hatch, should be removed once Lambda@Edge SAML proven
+    ecs = new ContainerModShibWordpressEcsConstruct(stack, wpId, { vpc, rdsHostName });
   }
   else {
-    // Define a standard ECS construct that is not publicly addressable.
+    // Non-public baseline pattern: not externally addressable
     console.log("WARNING: This fargate service will not be publicly addressable. " + 
       "Some modification after stack creation will be required.");
     ecs = new StandardWordpressConstruct(stack, wpId, { vpc, rdsHostName });
