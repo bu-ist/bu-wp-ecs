@@ -32,23 +32,13 @@ export class WordpressAppContainerDefConfig {
       return DEFAULT_DB_HOST;
     }
 
-    // The container will ALWAYS be able to "talk" on port 80
+    // Container serves HTTP on port 80 only. TLS termination happens upstream at the ALB.
     // NOTE: The host port must be left out or must be the same as the container port for AwsVpc or Host network mode.
     const portMappings = [{
       containerPort: hostPort,
       hostPort,
       protocol: ecs.Protocol.TCP
     }] as ecs.PortMapping[];
-
-    // The container will be able to "talk" over SSL if requests are not routed from cloudfront, 
-    // where cloudfront is performing ssl termination and viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS.
-    if( ! context.DNS?.cloudfront) {
-      portMappings.push({
-        containerPort: sslHostPort,
-        hostPort: sslHostPort,
-        protocol: ecs.Protocol.TCP
-      } as ecs.PortMapping)
-    }
 
     // Define the container environment variables
     const { 
