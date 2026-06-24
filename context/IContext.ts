@@ -77,7 +77,16 @@ export interface WordpressEnv {
   dbName?:           string;
   dbPort?:           string;
   debug?:            any;
-  environmentType?:  string;
+  /**
+   * Canonical WP_ENVIRONMENT_TYPE signal used by both WordPress runtime behavior
+   * and this stack's derived RDS posture (durability, high availability, scaling).
+   * Allowed values follow WordPress: 'local' | 'development' | 'staging' | 'production'.
+   * See https://developer.wordpress.org/reference/functions/wp_get_environment_type/
+   * Values outside this set are treated as 'production' by WordPress core, which can
+   * leave non-production containers without robots.txt suppression, making them indexable.
+   * BU stage labels (prod/test/devl/syst) belong in TAGS.Landscape, not here.
+   */
+  environmentType?:  'local' | 'development' | 'staging' | 'production';
 }
 
 export interface WordpressSecret {
