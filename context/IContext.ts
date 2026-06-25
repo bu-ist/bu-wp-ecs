@@ -22,7 +22,6 @@ export interface DNS {
   subdomain?:                string;
   certificateARN:            string;
   cloudfront?:               Cloudfront;
-  includeRDS:                boolean;
 }
 
 export interface Cloudfront {

@@ -1,7 +1,6 @@
 import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Peer, Port, SecurityGroup, SubnetType } from "aws-cdk-lib/aws-ec2";
 import { AuroraCapacityUnit, AuroraMysqlEngineVersion, ClusterInstance, Credentials, DatabaseCluster, DatabaseClusterEngine, } from 'aws-cdk-lib/aws-rds';
-import { CnameRecord, HostedZone } from 'aws-cdk-lib/aws-route53';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import { IContext, WORDPRESS_DB_TYPE } from '../context/IContext';
@@ -37,7 +36,6 @@ export class BuWordpressRdsConstruct extends Construct {
 
   private context: IContext;
   private rdsSocketAddress: string;
-  private dnsRecordAddress: string;
   private securityGroup: SecurityGroup;
   private port: number;
   private props: any;
@@ -114,11 +112,9 @@ export class BuWordpressRdsConstruct extends Construct {
 
   private build = () => {
     const { DEFAULT_DB_TYPE, DEFAULT_PORT, ENGINE_FULL_VERSION, ENGINE_MAJOR_VERSION } = BuWordpressRdsConstruct;
-    const { id, context: { TAGS: { Landscape }, DNS, WORDPRESS: { secret: { wpSecretArn }, env: {
+    const { id, context: { TAGS: { Landscape }, WORDPRESS: { secret: { wpSecretArn }, env: {
       dbType = DEFAULT_DB_TYPE, dbName, dbUser, dbPort = DEFAULT_PORT, environmentType
     } } } } = this;
-    const hostedZone = DNS?.hostedZone;
-    const addRecordToHostedZone = DNS?.includeRDS;
     const { vpc } = this.props;
 
     /**
@@ -194,25 +190,13 @@ export class BuWordpressRdsConstruct extends Construct {
         this.rdsSocketAddress = dc.clusterEndpoint.socketAddress;
         break;
     }
-
-    // Add a CNAME to the hosted zone indicated in the context record in order to enable dns routing to the db cluster.
-    if(hostedZone && addRecordToHostedZone) {
-      this.dnsRecordAddress = `${Landscape}.db.${hostedZone}`;
-      new CnameRecord(this, `${id}-mysql-cname`, {
-        domainName: this.rdsSocketAddress,
-        zone: HostedZone.fromLookup(this, `${id}-mysql-hostedzone`, { domainName: hostedZone }),
-        recordName: this.dnsRecordAddress,
-        ttl: Duration.seconds(300)
-     });
-    }
   }
 
   /**
    * Get the endpoint address for use in establishing database connections.
    */
-  public get endpointAddress(): string { 
-    const { dnsRecordAddress, rdsSocketAddress } = this;
-    return dnsRecordAddress || rdsSocketAddress;
+  public get endpointAddress(): string {
+    return this.rdsSocketAddress;
   }
 
   /**
