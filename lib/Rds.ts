@@ -157,7 +157,7 @@ export class BuWordpressRdsConstruct extends Construct {
           })
         ] : undefined;
 
-        const dc: DatabaseCluster = new DatabaseCluster(this, `${id}-mysql-cluster`, {
+        const dc: DatabaseCluster = new DatabaseCluster(this, 'aurora-mysql-cluster', {
           vpc,
           // Private by default: PRIVATE_WITH_EGRESS is the only private group this VPC exposes
           // (no isolated group exists). The DB lands in subnets carrying a NAT route it never uses.
