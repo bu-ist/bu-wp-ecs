@@ -131,9 +131,13 @@ export class BuWordpressRdsConstruct extends Construct {
     this.port = Number.parseInt(dbPort);
 
     this.securityGroup = new SecurityGroup(this, `${id}-mysql-sg`, {
-      vpc, 
-      securityGroupName: `wp-rds-mysql-${Landscape}-sg`,
-      description: 'Allows for ingress to the wordpress rds db only from ecs tasks.',
+      vpc,
+      // No explicit securityGroupName by design: "It is not recommended to use an explicit group name"
+      // (AWS CDK SecurityGroup API docs). GroupName is immutable, so pinning it forces any replacement to collide
+      // with the still-live group. Operator-facing identity instead comes from the BU-standard Name tag that
+      // BU_NameTagAspect applies to every resource (lib/Tagging.ts) as `${Service}-${Function}-${Landscape}-sg`,
+      // shown in the console "Name" column — mutable, and carrying no replacement cost.
+      description: 'Ingress to the WordPress RDS cluster, restricted to the ECS task security group.',
       allowAllOutbound: true,
     });
 
