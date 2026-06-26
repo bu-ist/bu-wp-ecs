@@ -168,7 +168,6 @@ export class BuWordpressRdsConstruct extends Construct {
           writer: ClusterInstance.serverlessV2(`${id}-mysql-writer`, {
             publiclyAccessible: false,
             autoMinorVersionUpgrade: true,
-            enablePerformanceInsights: true,
             instanceIdentifier: `${id}-mysql-writer-instance`,
           }),
           readers,
