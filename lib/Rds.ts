@@ -112,7 +112,7 @@ export class BuWordpressRdsConstruct extends Construct {
 
   private build = () => {
     const { DEFAULT_DB_TYPE, DEFAULT_PORT, ENGINE_FULL_VERSION, ENGINE_MAJOR_VERSION } = BuWordpressRdsConstruct;
-    const { id, context: { TAGS: { Landscape }, WORDPRESS: { secret: { wpSecretArn }, env: {
+    const { id, context: { WORDPRESS: { secret: { wpSecretArn }, env: {
       dbType = DEFAULT_DB_TYPE, dbName, dbUser, dbPort = DEFAULT_PORT, environmentType
     } } } } = this;
     const { vpc } = this.props;
@@ -120,8 +120,8 @@ export class BuWordpressRdsConstruct extends Construct {
     /**
      * NOTE: The following will automatically be added to the secret along with the username
      * and password: dbClusterIdentifier, engine, host, port, and dbname.
-     * CDK documenation states it will "create" a new secret, but they leave out that it will
-     * actually "patch" an existing secret if one is already there of the same name, instead 
+     * CDK documentation states it will "create" a new secret, but they leave out that it will
+     * actually "patch" an existing secret if one is already there of the same name, instead
      * of "paving over" it.
      */
     const credentials: Credentials = Credentials.fromSecret(
@@ -204,7 +204,7 @@ export class BuWordpressRdsConstruct extends Construct {
 
   /**
    * Add an ingress rule to the rds security group to allow ingress from other resources/cidrs.
-   * @param sg The security group whose members are being granted ingress through the rds instance/service security group.
+   * @param securityGroupId The security group whose members are being granted ingress through the rds service security group.
    */
   public addSecurityGroupIngressTo(securityGroupId: string): void {
     const { securityGroup, port } = this;
