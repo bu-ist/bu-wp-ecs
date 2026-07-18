@@ -59,7 +59,16 @@ const lookupCloudfrontParameters = async (context:IContext) => {
   const { WORDPRESS: { secret: { spSecretArn } }, REGION: region, DNS: { cloudfront: { challengeHeaderName='' } = {} } = {} } = context;
   const prefixId = await lookupCloudfrontPrefixListId(region);
   const challenge = await lookupCloudfrontHeaderChallenge(spSecretArn, challengeHeaderName);
-  return { 'cloudfront-prefix-id':prefixId, 'cloudfront-challenge':challenge };
+  // During a challenge-rotation window the secret also carries a `<header>-previous` field; it is absent
+  // otherwise, in which case this resolves to undefined and the ALB rule collapses to just the current
+  // value (no behavior change). Plumbed through so the listener can accept both while senders are flipped
+  // independently, in any order.
+  const challengePrevious = await lookupCloudfrontHeaderChallenge(spSecretArn, `${challengeHeaderName}-previous`);
+  return {
+    'cloudfront-prefix-id': prefixId,
+    'cloudfront-challenge': challenge,
+    'cloudfront-challenge-previous': challengePrevious,
+  };
 };
 
 /**

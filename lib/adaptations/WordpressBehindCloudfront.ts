@@ -127,26 +127,33 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
 
   adaptResources(): void {
     const { loadBalancer: { listeners }, targetGroup } = this.fargateService
-    const { isBlank } = ParameterTester;
+    const { isBlank, isNotBlank } = ParameterTester;
     const { challengeHeaderName } = this.context?.DNS?.cloudfront!;
     const challengeHeaderValue = this.props['cloudfront-challenge'];
+    // Optional previous value, present only during a challenge-rotation window (dual-value "accept both,
+    // then narrow"). Undefined outside a window, so the accepted set collapses to just the current value
+    // and the synthesized rule is unchanged.
+    const challengeHeaderValuePrevious = this.props['cloudfront-challenge-previous'];
     if(isBlank(challengeHeaderName)) {
       throw new Error('The alb challenge header name has not been set in context.json');
     }
     if(isBlank(challengeHeaderValue)) {
       throw new Error('The alb challenge header value was not provided (Did the lookup fail?)');
     }
-    
+    // Accept the current value plus, during a rotation window, the previous one. isNotBlank drops the
+    // undefined/blank previous so a whitespace value can never become an accepted header on this boundary.
+    const challengeHeaderValues = [ challengeHeaderValue, challengeHeaderValuePrevious ].filter(isNotBlank);
+
     // Find the https listener.
     const httpsListener = listeners.find((listener:ApplicationListener) => {
       return `${listener['protocol']}`.toLowerCase() == 'https';
     }) || {} as ApplicationListener;
     
-    // Apply a rule to the listener making it only forward traffic if the expected cloudfront challenge 
-    // header is present and has the expected value.
+    // Apply a rule to the listener making it only forward traffic if the expected cloudfront challenge
+    // header is present and carries the current value (or, mid-rotation, the previous one).
     httpsListener.addAction(`${this.id}-listener-action`, {
       action: ListenerAction.forward([ targetGroup ]),
-      conditions: [ ListenerCondition.httpHeader(challengeHeaderName, [ challengeHeaderValue ]) ],
+      conditions: [ ListenerCondition.httpHeader(challengeHeaderName, challengeHeaderValues) ],
       priority: 1
     });
 
