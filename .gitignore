@@ -16,3 +16,6 @@ cdk.context.json
 
 # Ignore the .env file
 .env
+
+# Ingore anything in the secrets directory
+secrets/*
