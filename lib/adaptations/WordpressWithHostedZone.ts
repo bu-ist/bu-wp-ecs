@@ -2,6 +2,7 @@ import { Stack } from "aws-cdk-lib";
 import { Certificate, ICertificate } from "aws-cdk-lib/aws-certificatemanager";
 import { ApplicationLoadBalancedServiceRecordType } from "aws-cdk-lib/aws-ecs-patterns";
 import { HostedZone, IHostedZone } from "aws-cdk-lib/aws-route53";
+import { ContainerModShibContext } from "../../context/IContext";
 import { WordpressEcsConstruct } from "../Wordpress";
 
 
@@ -15,7 +16,7 @@ import { WordpressEcsConstruct } from "../Wordpress";
  * preferred production pattern) is being proven in production. Once Lambda@Edge SAML is
  * stable, this adaptation should be removed entirely (YAGNI - no other use case exists).
  */
-export class ContainerModShibWordpressEcsConstruct extends WordpressEcsConstruct {
+export class ContainerModShibWordpressEcsConstruct extends WordpressEcsConstruct<ContainerModShibContext> {
 
   adaptResourceProperties(): void {
 

@@ -7,6 +7,7 @@ import { ApplicationListener, ApplicationLoadBalancer, ApplicationLoadBalancerPr
 import { ApplicationLoadBalancedFargateServiceProps, ApplicationLoadBalancedServiceRecordType } from "aws-cdk-lib/aws-ecs-patterns";
 import { HostedZone, IHostedZone } from "aws-cdk-lib/aws-route53";
 import { Route53HostedZone } from '../../bin/Route53';
+import { CloudfrontContext } from "../../context/IContext";
 import { ParameterTester } from "../Utils";
 import { WordpressEcsConstruct } from "../Wordpress";
 import { WordpressAppContainerDefConfig } from "../WordpressAppContainerDefConfig";
@@ -17,7 +18,7 @@ import { WordpressAppContainerDefConfig } from "../WordpressAppContainerDefConfi
  * stack as one of its origins. Optionally includes Route53 A record for custom domain.
  * Container does NOT redirect HTTP to HTTPS (CloudFront handles TLS termination).
  */
-export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
+export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct<CloudfrontContext> {
 
   alb: ApplicationLoadBalancer;
   
@@ -27,14 +28,10 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
 
   /**
    * Enforce singleton pattern for hosted zone construct to avoid name collisions.
-   * Returns hosted zone if Route53 integration is configured.
    */
-  private getDomainZone(): IHostedZone | undefined {
-    const { context: { DNS: { hostedZone:domainName = '', crossAccountHostedZoneId } = {} } } = this;
-    
-    // No hosted zone configured
-    if (!domainName) return undefined;
-    
+  private getDomainZone(): IHostedZone {
+    const { context: { DNS: { hostedZone:domainName, crossAccountHostedZoneId } } } = this;
+
     // Return cached zone if already looked up
     if (this.props.domainZone) return this.props.domainZone;
     
@@ -89,40 +86,27 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
     const sg = securityGroup.node.defaultChild as CfnSecurityGroup;
     sg.addPropertyDeletionOverride('SecurityGroupIngress');
     
-    // Route53 integration (optional)
-    const { hostedZone, certificateARN:certArn = '', subdomain } = DNS || {};
-    if (hostedZone) {
-      // Bind getDomainZone to this context
-      this.getDomainZone = this.getDomainZone.bind(this);
-      
-      // Cannot proceed without a certificate for Route53 integration
-      if (!certArn) {
-        throw new Error('You must include an SSL certificate ARN if using Route53 with CloudFront');
-      }
-
-      // Look up the hosted zone and certificate
-      const domainZone = this.getDomainZone();
-      const certificate = Certificate.fromCertificateArn(this, `${id}-acm-cert`, certArn) satisfies ICertificate;
-
-      // Configure fargate service with Route53 integration
-      // Prevent CDK from automatically adding an A record to the hosted zone for the ALB
-      const recordType = ApplicationLoadBalancedServiceRecordType.NONE;
-
-      Object.assign(this.fargateServiceProps, { 
-        certificate, 
-        redirectHTTP: true,
-        recordType: recordType,
-        publicLoadBalancer: true,
-        loadBalancer: this.alb,
-      } as ApplicationLoadBalancedFargateServiceProps);
-
-      if (subdomain) {
-        Object.assign(this.fargateServiceProps, {
-          domainZone,
-          domainName: subdomain
-        } as ApplicationLoadBalancedFargateServiceProps);
-      }
+    // TYPE 'cloudfront' guarantees all three, but context.json is not type-checked at runtime.
+    const { hostedZone, certificateARN:certArn, subdomain } = DNS;
+    const { anyBlank } = ParameterTester;
+    if (anyBlank(hostedZone, certArn, subdomain)) {
+      throw new Error(
+        'DNS.hostedZone, DNS.certificateARN and DNS.subdomain are all required when TYPE is "cloudfront"');
     }
+
+    this.getDomainZone = this.getDomainZone.bind(this);
+    const certificate = Certificate.fromCertificateArn(this, `${id}-acm-cert`, certArn) satisfies ICertificate;
+
+    Object.assign(this.fargateServiceProps, {
+      certificate,
+      redirectHTTP: true,
+      // This stack never creates the A record; the anchor CNAME is maintained in the zone's account.
+      recordType: ApplicationLoadBalancedServiceRecordType.NONE,
+      publicLoadBalancer: true,
+      loadBalancer: this.alb,
+      domainZone: this.getDomainZone(),
+      domainName: subdomain,
+    } as ApplicationLoadBalancedFargateServiceProps);
   }
 
   adaptResources(): void {
@@ -169,26 +153,24 @@ export class CloudfrontWordpressEcsConstruct extends WordpressEcsConstruct {
     };
     defaultListener.addPropertyOverride('DefaultActions.0.FixedResponseConfig', fixedResponseConfig);
     
-    // Route53 A record creation (optional, only if Route53 integration configured)
-    const { id, props: { ignoreRoute53 = false }, context: { DNS: { 
-      hostedZone, subdomain, cloudfront: { distributionDomainName = '' } = {} 
-    } = {} } } = this;
-    
-    if (hostedZone && !ignoreRoute53) {
-      if (!subdomain) {
-        console.warn('A subdomain was not provided; using root domain for hosted zone.');
-      }
-      
+    // ignoreRoute53 is true whenever no record was found, so this never fires for a new cluster;
+    // the anchor CNAME is maintained in the hosted zone's own account.
+    const { id, props: { ignoreRoute53 = false }, context: { DNS: {
+      hostedZone, subdomain, cloudfront: { distributionDomainName = '' }
+    } } } = this;
+
+    if (ignoreRoute53) {
+      console.log(`Ignoring route53 record creation for subdomain ${subdomain} in hosted zone ${hostedZone}`);
+    }
+    else {
       const route53HostedZone: Route53HostedZone = new Route53HostedZone(this.context);
       route53HostedZone.createARecord({
         scope: this,
         id: `${id}-cloudfront-alias-record`,
         distributionDomainName,
         hostedZone,
-        recordName: subdomain ?? ''
+        recordName: subdomain
       });
-    } else if (hostedZone && ignoreRoute53) {
-      console.log(`Ignoring route53 record creation for subdomain ${subdomain} in hosted zone ${hostedZone}`);
     }
   }
 }

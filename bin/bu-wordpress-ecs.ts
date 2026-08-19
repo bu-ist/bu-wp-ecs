@@ -3,7 +3,7 @@ import { App, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
 import { IpAddresses, IVpc, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { CustomResourceConfig } from 'aws-cdk-lib/custom-resources';
-import { IContext, SecretFieldNames } from '../context/IContext';
+import { CloudfrontContext, DEPLOYMENT_TYPES, IContext, SecretFieldNames } from '../context/IContext';
 import { checkIamServerCertificate } from '../lib/Certificate';
 import { ContextLog } from '../context/ContextLog';
 import { BuWordpressRdsConstruct as RdsConstruct } from '../lib/Rds';
@@ -55,8 +55,8 @@ const validateSecret = async (parm: { fldName:string, secretArn: string, region:
  * @param context 
  * @returns 
  */
-const lookupCloudfrontParameters = async (context:IContext) => {
-  const { WORDPRESS: { secret: { spSecretArn } }, REGION: region, DNS: { cloudfront: { challengeHeaderName='' } = {} } = {} } = context;
+const lookupCloudfrontParameters = async (context:CloudfrontContext) => {
+  const { WORDPRESS: { secret: { spSecretArn } }, REGION: region, DNS: { cloudfront: { challengeHeaderName } } } = context;
   const prefixId = await lookupCloudfrontPrefixListId(region);
   const challenge = await lookupCloudfrontHeaderChallenge(spSecretArn, challengeHeaderName);
   // During a challenge-rotation window the secret also carries a `<header>-previous` field; it is absent
@@ -76,8 +76,8 @@ const lookupCloudfrontParameters = async (context:IContext) => {
  * @param context 
  * @returns 
  */
-const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
-  const { DNS: { hostedZone, subdomain } = {} } = context;
+const ignoreRoute53 = async (context:CloudfrontContext): Promise<boolean> => {
+  const { DNS: { hostedZone, subdomain } } = context;
 
   if( subdomain && hostedZone ) {
     const route53HostedZone: Route53HostedZone = new Route53HostedZone(context);
@@ -119,7 +119,7 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
 
   // Deconstruct the context
   const { 
-    ACCOUNT:account, REGION:region, STACK_ID, VPC, DNS,
+    ACCOUNT:account, REGION:region, STACK_ID, VPC,
     TAGS: { Service, Function, Landscape, CostCenter='', Ticket='' }, 
     PREFIXES: { wordpress:pfxWordpress, rds:pfxRds },
     WORDPRESS: { secret: { spSecretArn, wpSecretArn }}
@@ -152,40 +152,43 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
     ? Vpc.fromLookup(stack, `${STACK_ID}-vpc`, { vpcId: VPC.existingVpcId })
     : new Vpc(stack, `${STACK_ID}-vpc`, { ipAddresses, availabilityZones });
   
-  const { hostedZone, certificateARN, cloudfront, cloudfront: {distributionDomainName='' } = {} } = DNS ?? {};
-
   // Define the RDS construct
   const rds = new RdsConstruct(stack, rdsId, { vpc });
   const { endpointAddress:rdsHostName } = rds;
 
   let ecs:WordpressEcsConstruct;
 
-  if( ! certificateARN) {
-    // Self-signed development pattern: IAM server certificate, no production auth
-    ecs = new SelfSignedWordpressEcsConstruct(stack, wpId, { 
-      vpc, rdsHostName, iamServerCertArn: (await checkIamServerCertificate())
-    });
-  }
-  else if(cloudfront) {
-    // CloudFront-fronted pattern: Lambda@Edge SAML authentication
-    // Handles both with and without Route53 (optional vanity domain)
-    ecs = new CloudfrontWordpressEcsConstruct(stack, wpId, { 
-      vpc, 
-      rdsHostName,
-      distributionDomainName,
-      ignoreRoute53: await ignoreRoute53(context), 
-      ...(await lookupCloudfrontParameters(context))
-    });
-  }
-  else if(hostedZone) {
-    // Container mod_shib pattern: temporary escape hatch, should be removed once Lambda@Edge SAML proven
-    ecs = new ContainerModShibWordpressEcsConstruct(stack, wpId, { vpc, rdsHostName });
-  }
-  else {
-    // Non-public baseline pattern: not externally addressable
-    console.log("WARNING: This fargate service will not be publicly addressable. " + 
-      "Some modification after stack creation will be required.");
-    ecs = new StandardWordpressConstruct(stack, wpId, { vpc, rdsHostName });
+  switch(context.TYPE) {
+    case 'cloudfront':
+      console.log(`NOTICE: TYPE "cloudfront" -> CloudfrontWordpressEcsConstruct`);
+      ecs = new CloudfrontWordpressEcsConstruct(stack, wpId, {
+        vpc,
+        rdsHostName,
+        distributionDomainName: context.DNS.cloudfront.distributionDomainName ?? '',
+        ignoreRoute53: await ignoreRoute53(context),
+        ...(await lookupCloudfrontParameters(context))
+      });
+      break;
+    case 'self-signed':
+      console.log(`NOTICE: TYPE "self-signed" -> SelfSignedWordpressEcsConstruct`);
+      ecs = new SelfSignedWordpressEcsConstruct(stack, wpId, {
+        vpc, rdsHostName, iamServerCertArn: (await checkIamServerCertificate())
+      });
+      break;
+    case 'container-mod-shib':
+      console.log(`NOTICE: TYPE "container-mod-shib" -> ContainerModShibWordpressEcsConstruct`);
+      ecs = new ContainerModShibWordpressEcsConstruct(stack, wpId, { vpc, rdsHostName });
+      break;
+    case 'non-public':
+      console.log(`NOTICE: TYPE "non-public" -> StandardWordpressConstruct`);
+      console.log("WARNING: This fargate service will not be publicly addressable. " +
+        "Some modification after stack creation will be required.");
+      ecs = new StandardWordpressConstruct(stack, wpId, { vpc, rdsHostName });
+      break;
+    default:
+      console.error(`Invalid TYPE in context/${contextFileName}.json: ` +
+        `${JSON.stringify((context as IContext).TYPE)}. Must be one of: ${DEPLOYMENT_TYPES.join(', ')}`);
+      process.exit(1);
   }
 
   // Grant wordpress access to the database

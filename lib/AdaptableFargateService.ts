@@ -19,13 +19,17 @@ export interface FargateService {
  * All adaptable fargate service constructs will implement the "adapt" methods of this class to add to or 
  * modify the resources being built within. Boilerplate functionality and properties can be added here as well.
  */
-export abstract class AdaptableConstruct extends Construct {
+/**
+ * TContext names which context variant this construct serves, so subclasses that only ever
+ * receive one variant read its required fields directly. Defaults to the full union.
+ */
+export abstract class AdaptableConstruct<TContext extends IContext = IContext> extends Construct {
 
   id: string;
   props: any;
   healthcheck: string;
   scope: Construct;
-  context: IContext;
+  context: TContext;
   _securityGroup: SecurityGroup;
 
   vpc: IVpc;
@@ -45,13 +49,6 @@ export abstract class AdaptableConstruct extends Construct {
    * API may provide, but most properties are readonly once the resource itself has been instantiated.
    */
   abstract adaptResources(): void;
-  
-  /**
-   * @returns A certificate value indicates ssl.
-   */
-  useSSL(): boolean {
-    return this.context?.DNS?.certificateARN ? true : false;
-  }
 
   /**
    * Set custom autoscaling for the fargate service.

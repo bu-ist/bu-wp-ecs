@@ -68,12 +68,13 @@ export class WordpressAppContainerDefConfig {
         Secret.fromSecretCompleteArn(scope, dbPassword, wpSecretArn), dbPassword),
     };
 
-    // Only mount SP secrets for ALB-direct pattern (container mod_shib)
-    // Pattern: certificateARN present (not self-signed) BUT no CloudFront (Lambda@Edge would handle auth)
-    // CloudFront-fronted patterns use Lambda@Edge for SAML; self-signed has no auth
-    const requiresContainerModShib = context.DNS?.certificateARN && !context.DNS?.cloudfront;
-    
-    if (requiresContainerModShib) {
+    // Only the container mod_shib pattern does SAML in-container; the CloudFront pattern
+    // leaves it to Lambda@Edge and self-signed has no auth at all.
+    if ((context as IContext).TYPE === 'container-mod-shib') {
+      if( ! spKey || ! spCert) {
+        throw new Error(
+          'WORDPRESS.secret.fieldNames.spKey and .spCert are required when TYPE is "container-mod-shib"');
+      }
       secrets.SHIB_SP_KEY = ecs.Secret.fromSecretsManager(
         Secret.fromSecretCompleteArn(scope, spKey, spSecretArn), spKey);
       secrets.SHIB_SP_CERT = ecs.Secret.fromSecretsManager(
