@@ -5,7 +5,7 @@ import { ContainerDefinitionOptions, FargateTaskDefinition, FargateTaskDefinitio
 import { ApplicationLoadBalancedFargateService as albfs, ApplicationLoadBalancedFargateServiceProps as albfsp } from 'aws-cdk-lib/aws-ecs-patterns';
 import { Construct } from 'constructs';
 import { IContext } from '../context/IContext';
-import { CfnCacheCluster, CfnSubnetGroup } from 'aws-cdk-lib/aws-elasticache';
+import { CfnCacheCluster, CfnParameterGroup, CfnSubnetGroup } from 'aws-cdk-lib/aws-elasticache';
 
 /**
  * Any fargate service will perform two steps.
@@ -107,7 +107,12 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
     const { id, vpc, context: { REDIS, TAGS: { Landscape } } } = this;
     if( ! REDIS ) return;
 
-    const { cacheNodeType='cache.t3.micro', numCacheNodes=1 } = REDIS; // Set defaults
+    const {
+      cacheNodeType='cache.t3.micro',
+      engineVersion,
+      parameterGroupFamily='redis7',
+      maxmemoryPolicy='allkeys-lru',
+    } = REDIS; // Set defaults
 
     this._securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(6379), 'Allow inbound TCP traffic on the Redis port');
     
@@ -120,11 +125,23 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
       cacheSubnetGroupName: `${id}-${Landscape}-redis-sg`,
     });
 
+    // The family must be compatible with the engine version, whether that version is pinned here
+    // or left for ElastiCache to select.
+    const redisParameterGroup = new CfnParameterGroup(this, `${id}-redis-parameter-group`, {
+      cacheParameterGroupFamily: parameterGroupFamily,
+      description: 'Parameter group for the redis cluster.',
+      properties: { 'maxmemory-policy': maxmemoryPolicy },
+    });
+
     // Setup properties for the redis cluster.
+    // numCacheNodes is fixed at 1: ElastiCache permits >1 only for the memcached engine. Cache
+    // capacity scales via cacheNodeType; replicas would require a CfnReplicationGroup instead.
     const redisClusterProps = {
       cacheNodeType,
       engine: 'redis',
-      numCacheNodes,
+      ...(engineVersion ? { engineVersion } : {}),
+      numCacheNodes: 1,
+      cacheParameterGroupName: redisParameterGroup.ref,
       vpcSecurityGroupIds: [ this._securityGroup.securityGroupId ],
       cacheSubnetGroupName: redisSubnetGroup.cacheSubnetGroupName,
     };
@@ -132,6 +149,7 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
     // Create the redis cluster, only after the subnet group is created.
     const redisCluster = new CfnCacheCluster(this, `${id}-redis-cluster`, redisClusterProps);
     redisCluster.addDependency(redisSubnetGroup);
+    redisCluster.addDependency(redisParameterGroup);
 
     // The wordpress container needs to find details of redis in its environment.
     const wpContainer = wordpressTaskDef.findContainer('wordpress');

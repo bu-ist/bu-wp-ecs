@@ -80,7 +80,12 @@ export interface VPC {
 
 export interface Redis {
   cacheNodeType?: string,
-  numCacheNodes?: number,
+  /** Engine version to pin. Omit and ElastiCache selects its current default at create time. */
+  engineVersion?: string,
+  /** Parameter group family. Defaults to `redis7`; must be compatible with the engine version. */
+  parameterGroupFamily?: string,
+  /** Eviction policy. Defaults to `allkeys-lru`; the ElastiCache default is `volatile-lru`. */
+  maxmemoryPolicy?: string,
 }
 
 export interface Prefixes {
