@@ -1,5 +1,4 @@
 import { Duration, Stack } from 'aws-cdk-lib';
-import { Schedule } from 'aws-cdk-lib/aws-applicationautoscaling';
 import { IVpc, Peer, Port, SecurityGroup, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { ContainerDefinitionOptions, FargateTaskDefinition, FargateTaskDefinitionProps, ScalableTaskCount } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancedFargateService as albfs, ApplicationLoadBalancedFargateServiceProps as albfsp } from 'aws-cdk-lib/aws-ecs-patterns';
@@ -82,24 +81,10 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
       scaleOutCooldown: Duration.minutes(1),      
     });
 
-    /**
-     * Scheduled adjustment to the minimum number of tasks required.
-     * This will effectively neutralize any target tracking scaling that attempts to reduce the task count
-     * down to 1 task by maintaining a lower limit of 2.  
-     */
-    stc.scaleOnSchedule('WorkDayMorningScaleUp', {
-      schedule: Schedule.cron({ hour: '8', minute: '0', weekDay: '1-5' }),
-      minCapacity: AdaptableConstruct.AUTOSCALING_MIN_CAPACITY
-    });
-    /**
-     * Scheduled adjustment to the minimum number of tasks required.
-     * This will effectively enable any target tracking scaling that wants to reduce the task count
-     * down to 1 task.  
-     */
-    stc.scaleOnSchedule('WorkDayEveningScaleDown', {
-      schedule: Schedule.cron({ hour: '20', minute: '0', weekDay: '1-5' }),
-      minCapacity: 1
-    });  
+    // A clock-based floor (e.g. lower minCapacity overnight) is available via
+    // stc.scaleOnSchedule() and Schedule.cron() if ever wanted, but isn't used here today.
+    // Schedule.cron()'s CronOptions has no timezone field - schedules run in UTC only, with
+    // no way to express local time.
   }
 
   /**
