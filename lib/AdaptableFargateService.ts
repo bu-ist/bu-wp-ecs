@@ -25,6 +25,10 @@ export interface FargateService {
  */
 export abstract class AdaptableConstruct<TContext extends IContext = IContext> extends Construct {
 
+  // Autoscaling floor. Also used as the ECS service's desiredCount (see Wordpress.ts), so a
+  // CloudFormation-driven deploy always resets desiredCount to this same floor.
+  public static AUTOSCALING_MIN_CAPACITY: number = 2;
+
   id: string;
   props: any;
   healthcheck: string;
@@ -60,7 +64,7 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
 
     const stc: ScalableTaskCount = this.fargateService.service.autoScaleTaskCount({
       // The lower boundary to which service auto scaling can adjust the desired count of the service.
-      minCapacity: 2,
+      minCapacity: AdaptableConstruct.AUTOSCALING_MIN_CAPACITY,
       // The upper boundary to which service auto scaling can adjust the desired count of the service.
       maxCapacity: 10
     });
@@ -85,7 +89,7 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
      */
     stc.scaleOnSchedule('WorkDayMorningScaleUp', {
       schedule: Schedule.cron({ hour: '8', minute: '0', weekDay: '1-5' }),
-      minCapacity: 2
+      minCapacity: AdaptableConstruct.AUTOSCALING_MIN_CAPACITY
     });
     /**
      * Scheduled adjustment to the minimum number of tasks required.

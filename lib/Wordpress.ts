@@ -43,7 +43,7 @@ export abstract class WordpressEcsConstruct<TContext extends IContext = IContext
 
   setResourceProperties(): void {
 
-    const { id, vpc, context: { TAGS: { Landscape }, STACK_ID: stackId, S3PROXY } } = this;
+    const { id, vpc, context: { TAGS: { Landscape }, STACK_ID: stackId, S3PROXY, AUTOSCALING } } = this;
 
     this.containerDefProps = new WordpressAppContainerDefConfig().getProperties(this);
 
@@ -81,7 +81,7 @@ export abstract class WordpressEcsConstruct<TContext extends IContext = IContext
       }),
       enableExecuteCommand: true, // Enable shell access
       loadBalancerName: `${id}-fargate-alb`,
-      desiredCount: 1,
+      desiredCount: AUTOSCALING ? AdaptableConstruct.AUTOSCALING_MIN_CAPACITY : 1,
       minHealthyPercent: 100,
       maxHealthyPercent: 200,
       circuitBreaker: { rollback: true },
