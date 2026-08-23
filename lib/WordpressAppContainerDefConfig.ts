@@ -5,6 +5,7 @@ import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { IContext } from '../context/IContext';
 import { AdaptableConstruct } from './AdaptableFargateService';
 import { WordpressS3ProxyContainerDefConfig } from './WordpressS3ProxyContainerDefConfig';
+import { AUTH_COOKIE_SECRET_FIELD_NAMES } from './secrets/AuthCookieSecretSchema';
 
 export class WordpressAppContainerDefConfig {
 
@@ -67,6 +68,23 @@ export class WordpressAppContainerDefConfig {
       WORDPRESS_DB_PASSWORD: ecs.Secret.fromSecretsManager(
         Secret.fromSecretCompleteArn(scope, dbPassword, wpSecretArn), dbPassword),
     };
+
+    // WordPress auth-cookie keys/salts: fixed field names (AUTH_COOKIE_SECRET_FIELD_NAMES),
+    // not per-cluster config. Every wpSecretArn is expected to carry all eight.
+    const authCookieEnvVars: Record<string, string> = {
+      WORDPRESS_AUTH_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.AUTH_KEY,
+      WORDPRESS_SECURE_AUTH_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.SECURE_AUTH_KEY,
+      WORDPRESS_LOGGED_IN_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.LOGGED_IN_KEY,
+      WORDPRESS_NONCE_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.NONCE_KEY,
+      WORDPRESS_AUTH_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.AUTH_SALT,
+      WORDPRESS_SECURE_AUTH_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.SECURE_AUTH_SALT,
+      WORDPRESS_LOGGED_IN_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.LOGGED_IN_SALT,
+      WORDPRESS_NONCE_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.NONCE_SALT,
+    };
+    for (const [envVar, fieldName] of Object.entries(authCookieEnvVars)) {
+      secrets[envVar] = ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, fieldName, wpSecretArn), fieldName);
+    }
 
     // Only the container mod_shib pattern does SAML in-container; the CloudFront pattern
     // leaves it to Lambda@Edge and self-signed has no auth at all.
