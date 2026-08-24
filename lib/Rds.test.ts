@@ -165,3 +165,29 @@ describe('BuWordpressRdsConstruct — correct by construction', () => {
     });
   });
 });
+
+describe('BuWordpressRdsConstruct — Aurora ACU-at-ceiling alarm', () => {
+
+  // Every posture shares the same max ACU (8, see derivePosture), so the alarm's threshold
+  // should too, regardless of environmentType.
+  it.each(['development', 'staging', 'production', undefined])(
+    'alarms at the max capacity for the posture (environmentType=%s)', (environmentType) => {
+      const template = synthTemplate(environmentType as string | undefined);
+      template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        MetricName: 'ServerlessDatabaseCapacity',
+        Namespace: 'AWS/RDS',
+        Threshold: 8,
+        ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+        EvaluationPeriods: 3,
+      });
+    }
+  );
+
+  it('publishes to an SNS topic, not silently', () => {
+    const template = synthTemplate('development');
+    const alarm = Object.values(template.findResources('AWS::CloudWatch::Alarm'))[0] as any;
+    expect(alarm.Properties.AlarmActions).toBeDefined();
+    expect(alarm.Properties.AlarmActions.length).toBeGreaterThan(0);
+    template.resourceCountIs('AWS::SNS::Topic', 1);
+  });
+});

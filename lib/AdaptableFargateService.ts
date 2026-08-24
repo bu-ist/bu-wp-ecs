@@ -2,6 +2,10 @@ import { Duration, Stack } from 'aws-cdk-lib';
 import { IVpc, Peer, Port, SecurityGroup, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { ContainerDefinitionOptions, FargateTaskDefinition, FargateTaskDefinitionProps, ScalableTaskCount } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancedFargateService as albfs, ApplicationLoadBalancedFargateServiceProps as albfsp } from 'aws-cdk-lib/aws-ecs-patterns';
+import { HttpCodeTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
+import { Topic } from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import { IContext } from '../context/IContext';
 import { CfnCacheCluster, CfnParameterGroup, CfnSubnetGroup } from 'aws-cdk-lib/aws-elasticache';
@@ -37,6 +41,7 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
   scope: Construct;
   context: TContext;
   _securityGroup: SecurityGroup;
+  private _alarmTopic?: Topic;
 
   vpc: IVpc;
   containerDefProps: ContainerDefinitionOptions;
@@ -75,19 +80,84 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
     stc.scaleOnCpuUtilization('CpuScaling', {
       targetUtilizationPercent: 50,
       scaleInCooldown: Duration.minutes(1),
-      scaleOutCooldown: Duration.minutes(1),      
+      scaleOutCooldown: Duration.minutes(1),
     });
 
     stc.scaleOnMemoryUtilization('MemoryScaling', {
       targetUtilizationPercent: 50,
       scaleInCooldown: Duration.minutes(1),
-      scaleOutCooldown: Duration.minutes(1),      
+      scaleOutCooldown: Duration.minutes(1),
     });
 
     // A clock-based floor (e.g. lower minCapacity overnight) is available via
     // stc.scaleOnSchedule() and Schedule.cron() if ever wanted, but isn't used here today.
     // Schedule.cron()'s CronOptions has no timezone field - schedules run in UTC only, with
     // no way to express local time.
+
+    const { id, fargateService: { service } } = this;
+    new Alarm(this, `${id}-task-count-ceiling-alarm`, {
+      alarmName: `${id}-task-count-at-ceiling`,
+      metric: new Metric({
+        namespace: 'AWS/ECS',
+        metricName: 'LiveTaskCount',
+        dimensionsMap: { ClusterName: service.cluster.clusterName, ServiceName: service.serviceName },
+        period: Duration.minutes(5),
+        statistic: 'Average',
+      }),
+      threshold: AdaptableConstruct.AUTOSCALING_MAX_CAPACITY,
+      evaluationPeriods: 3,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(this.getAlarmTopic()));
+  }
+
+  /**
+   * One shared SNS topic per cluster for every alarm this construct creates, lazily created on
+   * first use so callers don't need to sequence their calls around it.
+   */
+  private getAlarmTopic = (): Topic => {
+    if( ! this._alarmTopic ) {
+      this._alarmTopic = new Topic(this, `${this.id}-alarms-topic`, { topicName: `${this.id}-alarms` });
+    }
+    return this._alarmTopic;
+  }
+
+  /**
+   * Alarms that apply regardless of whether autoscaling is on.
+   */
+  public setServiceAlarms = (): void => {
+    const { id, fargateService: { service, targetGroup } } = this;
+    const alarmTopic = this.getAlarmTopic();
+
+    new Alarm(this, `${id}-ecs-memory-alarm`, {
+      alarmName: `${id}-ecs-memory-high`,
+      metric: service.metricMemoryUtilization({ period: Duration.minutes(5) }),
+      threshold: 80,
+      evaluationPeriods: 3,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(alarmTopic));
+
+    new Alarm(this, `${id}-alb-5xx-alarm`, {
+      alarmName: `${id}-alb-5xx`,
+      metric: targetGroup.metrics.httpCodeTarget(HttpCodeTarget.TARGET_5XX_COUNT, {
+        period: Duration.minutes(5),
+        statistic: 'Sum',
+      }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(alarmTopic));
+
+    new Alarm(this, `${id}-alb-unhealthy-alarm`, {
+      alarmName: `${id}-alb-unhealthy-hosts`,
+      metric: targetGroup.metrics.unhealthyHostCount({ period: Duration.minutes(1) }),
+      threshold: 0,
+      evaluationPeriods: 2,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(alarmTopic));
   }
 
   /**
@@ -147,6 +217,33 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
     const wpContainer = wordpressTaskDef.findContainer('wordpress');
     wpContainer?.addEnvironment('REDIS_HOST', redisCluster.attrRedisEndpointAddress);
     wpContainer?.addEnvironment('REDIS_PORT', redisCluster.attrRedisEndpointPort);
+
+    const alarmTopic = this.getAlarmTopic();
+    const redisMetric = (metricName: string, statistic: string) => new Metric({
+      namespace: 'AWS/ElastiCache',
+      metricName,
+      dimensionsMap: { CacheClusterId: redisCluster.ref },
+      period: Duration.minutes(5),
+      statistic,
+    });
+
+    new Alarm(this, `${id}-redis-memory-alarm`, {
+      alarmName: `${id}-redis-memory-high`,
+      metric: redisMetric('DatabaseMemoryUsagePercentage', 'Average'),
+      threshold: 80,
+      evaluationPeriods: 3,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(alarmTopic));
+
+    new Alarm(this, `${id}-redis-evictions-alarm`, {
+      alarmName: `${id}-redis-evictions`,
+      metric: redisMetric('Evictions', 'Sum'),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(alarmTopic));
   }
 
 

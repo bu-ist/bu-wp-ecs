@@ -2,6 +2,9 @@ import { Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { Peer, Port, SecurityGroup, SubnetType } from "aws-cdk-lib/aws-ec2";
 import { AuroraCapacityUnit, AuroraMysqlEngineVersion, ClusterInstance, Credentials, DatabaseCluster, DatabaseClusterEngine, } from 'aws-cdk-lib/aws-rds';
 import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
+import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
+import { Topic } from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import { IContext, WORDPRESS_DB_TYPE } from '../context/IContext';
 
@@ -191,6 +194,16 @@ export class BuWordpressRdsConstruct extends Construct {
           removalPolicy: posture.removalPolicy,
         });
         this.rdsSocketAddress = dc.clusterEndpoint.socketAddress;
+
+        new Alarm(this, `${id}-aurora-acu-ceiling-alarm`, {
+          alarmName: `${id}-aurora-acu-at-ceiling`,
+          metric: dc.metric('ServerlessDatabaseCapacity', { period: Duration.minutes(5), statistic: 'Maximum' }),
+          threshold: posture.maxCapacity,
+          evaluationPeriods: 3,
+          comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+          treatMissingData: TreatMissingData.NOT_BREACHING,
+        }).addAlarmAction(new SnsAction(new Topic(this, `${id}-rds-alarms-topic`, { topicName: `${id}-rds-alarms` })));
+
         break;
     }
   }

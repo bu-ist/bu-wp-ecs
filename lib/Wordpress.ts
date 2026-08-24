@@ -97,7 +97,7 @@ export abstract class WordpressEcsConstruct<TContext extends IContext = IContext
   buildResources(): void {
 
     const { scope, id, fargateServiceProps, containerDefProps, context: { DNS, S3PROXY }, setTaskAutoScaling, setStackTags,
-       setRedisCaching, sidecarContainerDefProps: _sidecarContainerDefProps, taskDefProps, healthcheck } = this;
+       setRedisCaching, setServiceAlarms, sidecarContainerDefProps: _sidecarContainerDefProps, taskDefProps, healthcheck } = this;
 
     setStackTags();
 
@@ -187,6 +187,8 @@ export abstract class WordpressEcsConstruct<TContext extends IContext = IContext
     }
 
     setTaskAutoScaling();
+
+    setServiceAlarms();
 
     setRedisCaching(wordpressTaskDef);
   }
