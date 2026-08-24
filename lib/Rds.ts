@@ -179,7 +179,7 @@ export class BuWordpressRdsConstruct extends Construct {
           serverlessV2MaxCapacity: posture.maxCapacity,
           // Auto-pause only applies when the floor is 0 ACU; set it explicitly so the synth is
           // assertable and idle non-production compute trends toward $0.
-          ...(scaleToZero ? { serverlessV2AutoPauseDuration: Duration.minutes(5) } : {}),
+          ...(scaleToZero ? { serverlessV2AutoPauseDuration: Duration.hours(1) } : {}),
           // Encrypted at rest as a first principle (AWS-managed aws/rds key). Immutable after creation.
           storageEncrypted: true,
           backup: { retention: Duration.days(posture.backupRetentionDays) },
