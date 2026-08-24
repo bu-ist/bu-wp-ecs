@@ -28,6 +28,9 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
   // CloudFormation-driven deploy always resets desiredCount to this same floor.
   public static AUTOSCALING_MIN_CAPACITY: number = 2;
 
+  // Autoscaling ceiling, does what AUTOSCALING_MIN_CAPACITY does for the floor and desiredCount.
+  public static AUTOSCALING_MAX_CAPACITY: number = 10;
+
   id: string;
   props: any;
   healthcheck: string;
@@ -55,7 +58,7 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
 
   /**
    * Set custom autoscaling for the fargate service.
-   * @returns 
+   * @returns
    */
   public setTaskAutoScaling = (): void => {
     const { AUTOSCALING=false } = this.context;
@@ -65,7 +68,7 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
       // The lower boundary to which service auto scaling can adjust the desired count of the service.
       minCapacity: AdaptableConstruct.AUTOSCALING_MIN_CAPACITY,
       // The upper boundary to which service auto scaling can adjust the desired count of the service.
-      maxCapacity: 10
+      maxCapacity: AdaptableConstruct.AUTOSCALING_MAX_CAPACITY
     });
 
     // Target Tracking
