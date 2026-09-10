@@ -19,3 +19,6 @@ cdk.context.json
 
 # Ingore anything in the secrets directory
 secrets/*
+
+# Ignore files not ready to be committed to the repo
+staging/*
