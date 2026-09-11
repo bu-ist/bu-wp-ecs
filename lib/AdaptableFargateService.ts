@@ -1,5 +1,5 @@
 import { Duration, Stack } from 'aws-cdk-lib';
-import { IVpc, Peer, Port, SecurityGroup, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { IVpc, Port, SecurityGroup } from 'aws-cdk-lib/aws-ec2';
 import { ContainerDefinitionOptions, FargateTaskDefinition, FargateTaskDefinitionProps, ScalableTaskCount } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancedFargateService as albfs, ApplicationLoadBalancedFargateServiceProps as albfsp } from 'aws-cdk-lib/aws-ecs-patterns';
 import { HttpCodeTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
@@ -176,8 +176,13 @@ export abstract class AdaptableConstruct<TContext extends IContext = IContext> e
       maxmemoryPolicy='allkeys-lru',
     } = REDIS; // Set defaults
 
-    this._securityGroup.addIngressRule(Peer.anyIpv4(), Port.tcp(6379), 'Allow inbound TCP traffic on the Redis port');
-    
+    // This group belongs to the ECS tasks (see Wordpress.ts) and the cache cluster below reuses
+    // it. The rule admits traffic only from members of this same group, so the WordPress tasks
+    // reach Redis but nothing outside it can. This includes new ECS tasks, as they come up carrying the
+    // group. Operators can reach the Redis endpoint directly through the ECS container with SSM
+    // port-forwarding.
+    this._securityGroup.addIngressRule(this._securityGroup, Port.tcp(6379), 'Redis, from the WordPress tasks in this group');
+
     // Redis doesn't need internet access, so prefer isolated subnets when available.
     // Falls back to private subnets for VPC topologies without isolated subnets.
     const redisSubnets = vpc.isolatedSubnets.length > 0 ? vpc.isolatedSubnets : vpc.privateSubnets;

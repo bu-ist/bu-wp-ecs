@@ -156,3 +156,29 @@ describe('AdaptableConstruct — alarms', () => {
     });
   });
 });
+
+describe('AdaptableConstruct — Redis network posture', () => {
+
+  // CDK may inline an ingress rule on the security group or emit it as its own resource,
+  // depending on the peer. Gather both so the assertions hold either way.
+  const ingressRulesOnPort = (template: Template, port: number): any[] => [
+    ...Object.values(template.findResources('AWS::EC2::SecurityGroup'))
+      .flatMap((sg: any) => sg.Properties?.SecurityGroupIngress ?? []),
+    ...Object.values(template.findResources('AWS::EC2::SecurityGroupIngress'))
+      .map((rule: any) => rule.Properties),
+  ].filter((rule: any) => rule.FromPort === port && rule.ToPort === port);
+
+  it('admits Redis traffic from a security group, never from a CIDR', () => {
+    const rules = ingressRulesOnPort(synth({ redis: true }), 6379);
+    expect(rules.length).toBeGreaterThan(0);
+    rules.forEach((rule) => {
+      expect(rule.SourceSecurityGroupId).toBeDefined();
+      expect(rule.CidrIp).toBeUndefined();
+      expect(rule.CidrIpv6).toBeUndefined();
+    });
+  });
+
+  it('opens no Redis port when REDIS is absent', () => {
+    expect(ingressRulesOnPort(synth({ redis: false }), 6379)).toHaveLength(0);
+  });
+});
