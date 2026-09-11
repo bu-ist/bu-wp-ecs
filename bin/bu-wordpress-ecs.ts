@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import { App, RemovalPolicy, Stack, StackProps } from 'aws-cdk-lib';
-import { IpAddresses, Vpc } from 'aws-cdk-lib/aws-ec2';
+import { IpAddresses, IVpc, Vpc } from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { CustomResourceConfig } from 'aws-cdk-lib/custom-resources';
-import { IContext, SecretFieldNames } from '../context/IContext';
-import * as ctx from '../context/context.json';
+import { CloudfrontContext, DEPLOYMENT_TYPES, IContext, SecretFieldNames } from '../context/IContext';
 import { checkIamServerCertificate } from '../lib/Certificate';
 import { ContextLog } from '../context/ContextLog';
 import { BuWordpressRdsConstruct as RdsConstruct } from '../lib/Rds';
@@ -14,7 +13,7 @@ import { getStackName, logHeader } from '../lib/Utils';
 import { StandardWordpressConstruct, WordpressEcsConstruct } from '../lib/Wordpress';
 import { CloudfrontWordpressEcsConstruct, lookupCloudfrontHeaderChallenge, lookupCloudfrontPrefixListId } from '../lib/adaptations/WordpressBehindCloudfront';
 import { SelfSignedWordpressEcsConstruct } from '../lib/adaptations/WordpressSelfSigned';
-import { HostedZoneForALBWordpressEcsConstruct, HostedZoneForCloudfrontWordpressEcsConstruct } from '../lib/adaptations/WordpressWithHostedZone';
+import { ContainerModShibWordpressEcsConstruct } from '../lib/adaptations/WordpressWithHostedZone';
 import { Route53HostedZone } from './Route53';
 
 
@@ -56,11 +55,20 @@ const validateSecret = async (parm: { fldName:string, secretArn: string, region:
  * @param context 
  * @returns 
  */
-const lookupCloudfrontParameters = async (context:IContext) => {
-  const { WORDPRESS: { secret: { spSecretArn } }, REGION: region, DNS: { cloudfront: { challengeHeaderName='' } = {} } = {} } = context;
+const lookupCloudfrontParameters = async (context:CloudfrontContext) => {
+  const { WORDPRESS: { secret: { spSecretArn } }, REGION: region, DNS: { cloudfront: { challengeHeaderName } } } = context;
   const prefixId = await lookupCloudfrontPrefixListId(region);
   const challenge = await lookupCloudfrontHeaderChallenge(spSecretArn, challengeHeaderName);
-  return { 'cloudfront-prefix-id':prefixId, 'cloudfront-challenge':challenge };
+  // During a challenge-rotation window the secret also carries a `<header>-previous` field; it is absent
+  // otherwise, in which case this resolves to undefined and the ALB rule collapses to just the current
+  // value (no behavior change). Plumbed through so the listener can accept both while senders are flipped
+  // independently, in any order.
+  const challengePrevious = await lookupCloudfrontHeaderChallenge(spSecretArn, `${challengeHeaderName}-previous`);
+  return {
+    'cloudfront-prefix-id': prefixId,
+    'cloudfront-challenge': challenge,
+    'cloudfront-challenge-previous': challengePrevious,
+  };
 };
 
 /**
@@ -68,8 +76,8 @@ const lookupCloudfrontParameters = async (context:IContext) => {
  * @param context 
  * @returns 
  */
-const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
-  const { DNS: { hostedZone, subdomain } = {} } = context;
+const ignoreRoute53 = async (context:CloudfrontContext): Promise<boolean> => {
+  const { DNS: { hostedZone, subdomain } } = context;
 
   if( subdomain && hostedZone ) {
     const route53HostedZone: Route53HostedZone = new Route53HostedZone(context);
@@ -91,13 +99,27 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
   CustomResourceConfig.of(app).addRemovalPolicy(RemovalPolicy.DESTROY);
   CustomResourceConfig.of(app).addLogRetentionLifetime(RetentionDays.ONE_WEEK);
 
+  // Load context file based on -c env=<name> parameter, defaulting to context.json
+  const envName = app.node.tryGetContext('env');
+  const contextFileName = envName ? `context-${envName}` : 'context';
+  let ctx: unknown;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ctx = require(`../context/${contextFileName}.json`);
+  } catch (err) {
+    console.error(`Failed to load context file: context/${contextFileName}.json`);
+    if (err instanceof Error) {
+      console.error(err.message);
+    }
+    process.exit(1);
+  }
   const context = ctx as IContext;
   
   app.node.setContext('stack-parms', context);
 
   // Deconstruct the context
   const { 
-    ACCOUNT:account, REGION:region, STACK_ID, DNS,
+    ACCOUNT:account, REGION:region, STACK_ID, VPC,
     TAGS: { Service, Function, Landscape, CostCenter='', Ticket='' }, 
     PREFIXES: { wordpress:pfxWordpress, rds:pfxRds },
     WORDPRESS: { secret: { spSecretArn, wpSecretArn }}
@@ -124,51 +146,49 @@ const ignoreRoute53 = async (context:IContext): Promise<boolean> => {
   const stack = new Stack(app, 'StandardStack', stackProps);
   const ipAddresses = IpAddresses.cidr('10.0.0.0/21');
   const availabilityZones = [ `${region}a`, `${region}b`];
-  const vpc: Vpc = new Vpc(stack, `${STACK_ID}-vpc`, { ipAddresses, availabilityZones }); 
-  const { hostedZone, certificateARN, cloudfront, cloudfront: {distributionDomainName='' } = {} } = DNS ?? {};
-
+  
+  // VPC: Use existing VPC if specified, otherwise create new VPC with standard defaults
+  const vpc: IVpc = VPC?.existingVpcId 
+    ? Vpc.fromLookup(stack, `${STACK_ID}-vpc`, { vpcId: VPC.existingVpcId })
+    : new Vpc(stack, `${STACK_ID}-vpc`, { ipAddresses, availabilityZones });
+  
   // Define the RDS construct
   const rds = new RdsConstruct(stack, rdsId, { vpc });
   const { endpointAddress:rdsHostName } = rds;
 
   let ecs:WordpressEcsConstruct;
 
-  if( ! certificateARN) {
-    // Define an ECS construct that routes https via a self-signed iam certificate.
-    ecs = new SelfSignedWordpressEcsConstruct(stack, wpId, { 
-      vpc, rdsHostName, iamServerCertArn: (await checkIamServerCertificate())
-    });
-  }
-  else if(distributionDomainName && hostedZone) {
-    // Define an ECS construct that is routed to through a pre-existing cloudfront distribution via route53.
-    ecs = new HostedZoneForCloudfrontWordpressEcsConstruct({
-      baseline: stack,
-      id: wpId,
-      props: { 
-        vpc, 
-        rdsHostName, 
-        ignoreRoute53: await ignoreRoute53(context), 
-        ...(await lookupCloudfrontParameters(context)) 
-      },
-      distributionDomainName
-    });
-  }
-  else if(cloudfront && ! hostedZone) {
-    // Define an ECS construct that accepts traffic only from a pre-existing cloudfront distribution 
-    // on its default domain that is configured to route to the ALB created by the fargate construct.
-    ecs = new CloudfrontWordpressEcsConstruct(stack, wpId, { 
-      vpc, rdsHostName, ...(await lookupCloudfrontParameters(context))
-    });
-  }
-  else if(hostedZone) {
-    // Define an ECS construct that routes through the auto-created ALB of the fargate construct via route53.
-    ecs = new HostedZoneForALBWordpressEcsConstruct(stack, wpId, { vpc, rdsHostName });
-  }
-  else {
-    // Define a standard ECS construct that is not publicly addressable.
-    console.log("WARNING: This fargate service will not be publicly addressable. " + 
-      "Some modification after stack creation will be required.");
-    ecs = new StandardWordpressConstruct(stack, wpId, { vpc, rdsHostName });
+  switch(context.TYPE) {
+    case 'cloudfront':
+      console.log(`NOTICE: TYPE "cloudfront" -> CloudfrontWordpressEcsConstruct`);
+      ecs = new CloudfrontWordpressEcsConstruct(stack, wpId, {
+        vpc,
+        rdsHostName,
+        distributionDomainName: context.DNS.cloudfront.distributionDomainName ?? '',
+        ignoreRoute53: await ignoreRoute53(context),
+        ...(await lookupCloudfrontParameters(context))
+      });
+      break;
+    case 'self-signed':
+      console.log(`NOTICE: TYPE "self-signed" -> SelfSignedWordpressEcsConstruct`);
+      ecs = new SelfSignedWordpressEcsConstruct(stack, wpId, {
+        vpc, rdsHostName, iamServerCertArn: (await checkIamServerCertificate())
+      });
+      break;
+    case 'container-mod-shib':
+      console.log(`NOTICE: TYPE "container-mod-shib" -> ContainerModShibWordpressEcsConstruct`);
+      ecs = new ContainerModShibWordpressEcsConstruct(stack, wpId, { vpc, rdsHostName });
+      break;
+    case 'non-public':
+      console.log(`NOTICE: TYPE "non-public" -> StandardWordpressConstruct`);
+      console.log("WARNING: This fargate service will not be publicly addressable. " +
+        "Some modification after stack creation will be required.");
+      ecs = new StandardWordpressConstruct(stack, wpId, { vpc, rdsHostName });
+      break;
+    default:
+      console.error(`Invalid TYPE in context/${contextFileName}.json: ` +
+        `${JSON.stringify((context as IContext).TYPE)}. Must be one of: ${DEPLOYMENT_TYPES.join(', ')}`);
+      process.exit(1);
   }
 
   // Grant wordpress access to the database

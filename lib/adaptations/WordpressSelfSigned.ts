@@ -51,13 +51,14 @@ export class SelfSignedWordpressEcsConstruct extends WordpressEcsConstruct {
     });
 
     // Associate the listener with a new target group for the wordpress container, and register the listener with the alb.
-    listener443.addTargets(`${this.id}-https-tg`, {
-      protocol: ApplicationProtocol.HTTPS,
-      targetGroupName: `${this.id}-https-tg`,
+    // Note: ALB terminates TLS with self-signed cert; backend communication uses HTTP on port 80
+    listener443.addTargets(`${this.id}-http-tg`, {
+      protocol: ApplicationProtocol.HTTP,
+      targetGroupName: `${this.id}-http-tg`,
       targets: [
         this.fargateService.service.loadBalancerTarget({
           containerName: containerName!,
-          containerPort: WordpressAppContainerDefConfig.SSL_HOST_PORT,
+          containerPort: WordpressAppContainerDefConfig.HOST_PORT,
         })
       ],
       healthCheck: {

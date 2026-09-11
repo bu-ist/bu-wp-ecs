@@ -6,6 +6,7 @@ import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
+import { IContext } from '../context/IContext';
 import { AdaptableConstruct, FargateService } from './AdaptableFargateService';
 import { ParameterTester } from './Utils';
 import { WordpressAppContainerDefConfig } from './WordpressAppContainerDefConfig';
@@ -15,7 +16,8 @@ import { WordpressS3ProxyContainerDefConfig } from './WordpressS3ProxyContainerD
  * Baseline class for the wordpresss application load balanced fargate service.
  * Subclasses will "adapt" this baseline in order to customize it. 
  */
-export abstract class WordpressEcsConstruct extends AdaptableConstruct implements FargateService {
+export abstract class WordpressEcsConstruct<TContext extends IContext = IContext>
+  extends AdaptableConstruct<TContext> implements FargateService {
 
   private sidecarContainerDefProps: ContainerDefinitionOptions;
   
@@ -41,7 +43,7 @@ export abstract class WordpressEcsConstruct extends AdaptableConstruct implement
 
   setResourceProperties(): void {
 
-    const { id, vpc, context: { TAGS: { Landscape }, STACK_ID: stackId, S3PROXY } } = this;
+    const { id, vpc, context: { TAGS: { Landscape }, STACK_ID: stackId, S3PROXY, AUTOSCALING } } = this;
 
     this.containerDefProps = new WordpressAppContainerDefConfig().getProperties(this);
 
@@ -79,7 +81,7 @@ export abstract class WordpressEcsConstruct extends AdaptableConstruct implement
       }),
       enableExecuteCommand: true, // Enable shell access
       loadBalancerName: `${id}-fargate-alb`,
-      desiredCount: 1,
+      desiredCount: AUTOSCALING ? AdaptableConstruct.AUTOSCALING_MIN_CAPACITY : 1,
       minHealthyPercent: 100,
       maxHealthyPercent: 200,
       circuitBreaker: { rollback: true },
@@ -95,7 +97,7 @@ export abstract class WordpressEcsConstruct extends AdaptableConstruct implement
   buildResources(): void {
 
     const { scope, id, fargateServiceProps, containerDefProps, context: { DNS, S3PROXY }, setTaskAutoScaling, setStackTags,
-       setRedisCaching, sidecarContainerDefProps: _sidecarContainerDefProps, taskDefProps, healthcheck } = this;
+       setRedisCaching, setServiceAlarms, sidecarContainerDefProps: _sidecarContainerDefProps, taskDefProps, healthcheck } = this;
 
     setStackTags();
 
@@ -165,11 +167,13 @@ export abstract class WordpressEcsConstruct extends AdaptableConstruct implement
       ]
     }));
 
-    const { noneBlank } = ParameterTester;
-    const { hostedZone, subdomain, certificateARN } = DNS || {};
+    const { isNotBlank } = ParameterTester;
+    const { subdomain } = DNS || {};
 
-    if(noneBlank(hostedZone, subdomain, certificateARN)) {
-      // Ensure the HTTP_HOST wordpress container environment variable is the dns name of the route53 and cloudfront custom domain.
+    // SERVER_NAME is read once, at first boot, by the image entrypoint and passed as --url to
+    // `wp core multisite-install`. It lands in the database and is never re-derived, so this is
+    // the cluster's persistent notion of self, not just a hostname.
+    if(isNotBlank(subdomain)) {
       wordpressTaskDef.findContainer('wordpress')?.addEnvironment('HTTP_HOST', subdomain!);
       wordpressTaskDef.findContainer('wordpress')?.addEnvironment('SERVER_NAME', subdomain!);
       new CfnOutput(scope, 'CloudFrontDistributionURL', {
@@ -178,12 +182,13 @@ export abstract class WordpressEcsConstruct extends AdaptableConstruct implement
       });
     }
     else {
-      // Ensure the HTTP_HOST wordpress container environment variable is the dns name of the alb.
       wordpressTaskDef.findContainer('wordpress')?.addEnvironment('HTTP_HOST', loadBalancer.loadBalancerDnsName);
       wordpressTaskDef.findContainer('wordpress')?.addEnvironment('SERVER_NAME', loadBalancer.loadBalancerDnsName);
     }
 
     setTaskAutoScaling();
+
+    setServiceAlarms();
 
     setRedisCaching(wordpressTaskDef);
   }

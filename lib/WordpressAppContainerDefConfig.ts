@@ -5,6 +5,7 @@ import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { IContext } from '../context/IContext';
 import { AdaptableConstruct } from './AdaptableFargateService';
 import { WordpressS3ProxyContainerDefConfig } from './WordpressS3ProxyContainerDefConfig';
+import { AUTH_COOKIE_SECRET_FIELD_NAMES } from './secrets/AuthCookieSecretSchema';
 
 export class WordpressAppContainerDefConfig {
 
@@ -32,23 +33,13 @@ export class WordpressAppContainerDefConfig {
       return DEFAULT_DB_HOST;
     }
 
-    // The container will ALWAYS be able to "talk" on port 80
+    // Container serves HTTP on port 80 only. TLS termination happens upstream at the ALB.
     // NOTE: The host port must be left out or must be the same as the container port for AwsVpc or Host network mode.
     const portMappings = [{
       containerPort: hostPort,
       hostPort,
       protocol: ecs.Protocol.TCP
     }] as ecs.PortMapping[];
-
-    // The container will be able to "talk" over SSL if requests are not routed from cloudfront, 
-    // where cloudfront is performing ssl termination and viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS.
-    if( ! context.DNS?.cloudfront) {
-      portMappings.push({
-        containerPort: sslHostPort,
-        hostPort: sslHostPort,
-        protocol: ecs.Protocol.TCP
-      } as ecs.PortMapping)
-    }
 
     // Define the container environment variables
     const { 
@@ -60,6 +51,7 @@ export class WordpressAppContainerDefConfig {
       dbName:WORDPRESS_DB_NAME=DEFAULT_DB_NAME, 
       dbHost:WORDPRESS_DB_HOST=getRdsHost(),
       debug='0', // Default to debug off
+      environmentType:WP_ENVIRONMENT_TYPE='production',
     } = wp.env;
     const WORDPRESS_DEBUG = `${debug}`;
     const WP_CLI_ALLOW_ROOT = 'true';
@@ -68,6 +60,44 @@ export class WordpressAppContainerDefConfig {
     const {
       spSecretArn, wpSecretArn, fieldNames: { configExtra, dbPassword, spCert, spKey }
     } = wp.secret;
+
+    // Build secrets object conditionally based on deployment pattern
+    const secrets: Record<string, ecs.Secret> = {
+      WORDPRESS_CONFIG_EXTRA: ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, configExtra, wpSecretArn), configExtra),
+      WORDPRESS_DB_PASSWORD: ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, dbPassword, wpSecretArn), dbPassword),
+    };
+
+    // WordPress auth-cookie keys/salts: fixed field names (AUTH_COOKIE_SECRET_FIELD_NAMES),
+    // not per-cluster config. Every wpSecretArn is expected to carry all eight.
+    const authCookieEnvVars: Record<string, string> = {
+      WORDPRESS_AUTH_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.AUTH_KEY,
+      WORDPRESS_SECURE_AUTH_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.SECURE_AUTH_KEY,
+      WORDPRESS_LOGGED_IN_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.LOGGED_IN_KEY,
+      WORDPRESS_NONCE_KEY: AUTH_COOKIE_SECRET_FIELD_NAMES.NONCE_KEY,
+      WORDPRESS_AUTH_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.AUTH_SALT,
+      WORDPRESS_SECURE_AUTH_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.SECURE_AUTH_SALT,
+      WORDPRESS_LOGGED_IN_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.LOGGED_IN_SALT,
+      WORDPRESS_NONCE_SALT: AUTH_COOKIE_SECRET_FIELD_NAMES.NONCE_SALT,
+    };
+    for (const [envVar, fieldName] of Object.entries(authCookieEnvVars)) {
+      secrets[envVar] = ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, fieldName, wpSecretArn), fieldName);
+    }
+
+    // Only the container mod_shib pattern does SAML in-container; the CloudFront pattern
+    // leaves it to Lambda@Edge and self-signed has no auth at all.
+    if ((context as IContext).TYPE === 'container-mod-shib') {
+      if( ! spKey || ! spCert) {
+        throw new Error(
+          'WORDPRESS.secret.fieldNames.spKey and .spCert are required when TYPE is "container-mod-shib"');
+      }
+      secrets.SHIB_SP_KEY = ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, spKey, spSecretArn), spKey);
+      secrets.SHIB_SP_CERT = ecs.Secret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(scope, spCert, spSecretArn), spCert);
+    }
     
     return {
       image: ecs.ContainerImage.fromRegistry(wp.dockerImage),
@@ -89,19 +119,10 @@ export class WordpressAppContainerDefConfig {
       }),
       environment: { 
         SP_ENTITY_ID, IDP_ENTITY_ID, TZ, S3PROXY_HOST, WORDPRESS_DB_HOST,
-        WORDPRESS_DB_USER, WORDPRESS_DB_NAME, WORDPRESS_DEBUG, WP_CLI_ALLOW_ROOT
+        WORDPRESS_DB_USER, WORDPRESS_DB_NAME, WORDPRESS_DEBUG, WP_CLI_ALLOW_ROOT,
+        WP_ENVIRONMENT_TYPE
       },
-      // https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html
-      secrets: {
-        WORDPRESS_CONFIG_EXTRA: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, configExtra, wpSecretArn), configExtra),
-        WORDPRESS_DB_PASSWORD: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, dbPassword, wpSecretArn), dbPassword),
-        SHIB_SP_KEY: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, spKey, spSecretArn), spKey),
-        SHIB_SP_CERT: ecs.Secret.fromSecretsManager(
-          Secret.fromSecretCompleteArn(scope, spCert, spSecretArn), spCert),
-      }
+      secrets
     } as ecs.ContainerDefinitionOptions
   }
 }

@@ -35,7 +35,8 @@
         "debug": "0",
         "dbType": "serverless",
         "dbUser": "root",
-        "dbName": "wp_db"
+        "dbName": "wp_db",
+        "environmentType": "development"
       },
       "secret": {
         "wpSecretArn": "arn:aws:secretsmanager:us-east-2:770203350335:secret:wp/devl1-19LH5c",
