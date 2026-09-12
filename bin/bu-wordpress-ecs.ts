@@ -6,6 +6,7 @@ import { CustomResourceConfig } from 'aws-cdk-lib/custom-resources';
 import { CloudfrontContext, DEPLOYMENT_TYPES, IContext, SecretFieldNames } from '../context/IContext';
 import { checkIamServerCertificate } from '../lib/Certificate';
 import { ContextLog } from '../context/ContextLog';
+import { JobRunnerConstruct } from '../lib/JobRunner';
 import { BuWordpressRdsConstruct as RdsConstruct } from '../lib/Rds';
 import { SecretsManagerSecret } from '../lib/Secret';
 import { BU_NameTagAspect, TaggingAspect } from '../lib/Tagging';
@@ -193,7 +194,15 @@ const ignoreRoute53 = async (context:CloudfrontContext): Promise<boolean> => {
 
   // Grant wordpress access to the database
   rds.addSecurityGroupIngressTo(ecs.securityGroup.securityGroupId);
-      
+
+  // Add an optional job runner construct if specified in the context.
+  if(context.JOBRUNNER) {
+    new JobRunnerConstruct(stack, `${STACK_ID}-jobs-${Landscape}`, {
+      wordpress: ecs, jobRunner: context.JOBRUNNER
+    });
+  }
+
+
   // Store the context configuration using ContextLog (S3 storage)
   // NOTE: If you want to change the id of this construct or name of the bucket, you must first
   // redeploy with this code commented out (to remove it), then uncomment and redeploy again 

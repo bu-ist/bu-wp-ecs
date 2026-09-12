@@ -20,6 +20,7 @@ interface ContextBase {
   WORDPRESS:          Wordpress;
   AUTOSCALING?:       boolean;
   REDIS?:             Redis;
+  JOBRUNNER?:         JobRunner;
   TAGS:               Tags;
 }
 
@@ -86,6 +87,21 @@ export interface Redis {
   parameterGroupFamily?: string,
   /** Eviction policy. Defaults to `allkeys-lru`; the ElastiCache default is `volatile-lru`. */
   maxmemoryPolicy?: string,
+}
+
+/** Scheduled ephemeral task that drains the site-manager job queue. Omit and no schedule is built. */
+export interface JobRunner {
+  /**
+   * An EventBridge Scheduler expression: `rate(...)` or a six-field `cron(...)`.
+   * In environments where the database auto-pauses when idle, a short `rate(...)` can keep it warm
+   * and prevent auto-pause, while `cron(...)` can still leave idle windows where auto-pause engages
+   * if there is no organic traffic.
+   */
+  schedule: string;
+  /** IANA zone for interpreting a `cron` expression, e.g. `America/New_York`. Defaults to UTC. */
+  timeZone?: string;
+  /** Build the schedule in the disabled state. Defaults to enabled. */
+  enabled?: boolean;
 }
 
 export interface Prefixes {
