@@ -21,6 +21,7 @@ interface ContextBase {
   AUTOSCALING?:       boolean;
   REDIS?:             Redis;
   JOBRUNNER?:         JobRunner;
+  NEWRELIC?:          NewRelic;
   TAGS:               Tags;
 }
 
@@ -87,6 +88,24 @@ export interface Redis {
   parameterGroupFamily?: string,
   /** Eviction policy. Defaults to `allkeys-lru`; the ElastiCache default is `volatile-lru`. */
   maxmemoryPolicy?: string,
+}
+
+/**
+ * New Relic PHP agent. The image installs the agent disabled; its entrypoint enables it only when
+ * NEW_RELIC_ENABLED is "true" and NEW_RELIC_LICENSE_KEY is set. Omit this block to leave the
+ * task definition without any New Relic env or secret.
+ */
+export interface NewRelic {
+  /** Turns the agent on. false keeps the env and secret in place but the agent off. */
+  enabled:            boolean;
+  /** APM application name, e.g. "WordPress - AWS alpha prod". */
+  appName:            string;
+  /** Entity labels as "key:value;key:value". */
+  labels?:            string;
+  /** Complete ARN (with the 6-character suffix) of a Secrets Manager secret holding a license key. */
+  licenseSecretArn:   string;
+  /** JSON field in that secret that holds the key, e.g. "api_key". */
+  licenseSecretField: string;
 }
 
 /** Scheduled ephemeral task that drains the site-manager job queue. Omit and no schedule is built. */

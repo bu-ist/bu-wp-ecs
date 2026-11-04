@@ -83,6 +83,12 @@ Conflicting or mutually exclusive parameter combinations will be caught by valid
       - configExtra: The name of the entry in the secret that contains the "WORDPRESS_CONFIG_EXTRA" content to be added dynamically to the wp-config.php file as documented [here](https://github.com/docker-library/wordpress/pull/142).
       - spKey: The signing key for authentication with the BU shibboleth IDP. Documented [here](https://shibboleth.atlassian.net/wiki/spaces/CONCEPT/pages/948470554/SAMLKeysAndCertificates#SAMLKeysAndCertificates-SigningKeyandCertificate)
       - spCert: The signing cert for authentication with the BU shibboleth IDP. Documented [here](https://shibboleth.atlassian.net/wiki/spaces/CONCEPT/pages/948470554/SAMLKeysAndCertificates#SAMLKeysAndCertificates-SigningKeyandCertificate)
+- NEWRELIC *(optional)*: New Relic PHP agent settings for the wordpress container. The image installs the agent disabled and enables it at startup only when `NEW_RELIC_ENABLED` is `"true"` and `NEW_RELIC_LICENSE_KEY` is set. Omit the block to add no New Relic env or secret. The JobRunner schedule uses the same task definition, so job runs inherit it.
+  - enabled: `true` turns the agent on; `false` keeps the env and secret but leaves it off.
+  - appName: APM application name, set as `NEW_RELIC_APP_NAME`.
+  - labels: *(optional)* entity labels as `"key:value;key:value"`, set as `NEW_RELIC_LABELS`.
+  - licenseSecretArn: Complete ARN (including the 6-character suffix) of a Secrets Manager secret holding a New Relic license key. The execution role is granted read on it.
+  - licenseSecretField: JSON field in that secret holding the key (for example `"api_key"`), injected as `NEW_RELIC_LICENSE_KEY`.
 - TAGS:
   - Service: Standard tagging requirement for the service the app is part of. Defaults to "websites"
   - Function: Standard tagging requirement for the function the app performs. Defaults to "wordpress"

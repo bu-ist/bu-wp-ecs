@@ -1,10 +1,11 @@
 import { CfnOutput, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { SecurityGroup } from "aws-cdk-lib/aws-ec2";
-import { Cluster, ContainerDefinitionOptions, ContainerInsights, FargateTaskDefinition, PropagatedTagSource } from 'aws-cdk-lib/aws-ecs';
+import { Cluster, ContainerDefinitionOptions, ContainerInsights, FargateTaskDefinition, PropagatedTagSource, Secret as EcsSecret } from 'aws-cdk-lib/aws-ecs';
 import { ApplicationLoadBalancedFargateService as albfs, ApplicationLoadBalancedFargateServiceProps as albfsp } from 'aws-cdk-lib/aws-ecs-patterns';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
+import { Secret } from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import { IContext } from '../context/IContext';
 import { AdaptableConstruct, FargateService } from './AdaptableFargateService';
@@ -96,7 +97,7 @@ export abstract class WordpressEcsConstruct<TContext extends IContext = IContext
 
   buildResources(): void {
 
-    const { scope, id, fargateServiceProps, containerDefProps, context: { DNS, S3PROXY }, setTaskAutoScaling, setStackTags,
+    const { scope, id, fargateServiceProps, containerDefProps, context: { DNS, S3PROXY, NEWRELIC }, setTaskAutoScaling, setStackTags,
        setRedisCaching, setServiceAlarms, sidecarContainerDefProps: _sidecarContainerDefProps, taskDefProps, healthcheck } = this;
 
     setStackTags();
@@ -184,6 +185,20 @@ export abstract class WordpressEcsConstruct<TContext extends IContext = IContext
     else {
       wordpressTaskDef.findContainer('wordpress')?.addEnvironment('HTTP_HOST', loadBalancer.loadBalancerDnsName);
       wordpressTaskDef.findContainer('wordpress')?.addEnvironment('SERVER_NAME', loadBalancer.loadBalancerDnsName);
+    }
+
+    // New Relic PHP agent (see NewRelic in context/IContext.ts). addSecret grants the execution role
+    // read on the secret. The JobRunner schedule runs this task definition, so jobs inherit it.
+    if(NEWRELIC) {
+      const wpContainer = wordpressTaskDef.findContainer('wordpress');
+      wpContainer?.addEnvironment('NEW_RELIC_ENABLED', `${NEWRELIC.enabled === true}`);
+      wpContainer?.addEnvironment('NEW_RELIC_APP_NAME', NEWRELIC.appName);
+      if(isNotBlank(NEWRELIC.labels)) {
+        wpContainer?.addEnvironment('NEW_RELIC_LABELS', NEWRELIC.labels!);
+      }
+      wpContainer?.addSecret('NEW_RELIC_LICENSE_KEY', EcsSecret.fromSecretsManager(
+        Secret.fromSecretCompleteArn(this, `${id}-newrelic-license`, NEWRELIC.licenseSecretArn),
+        NEWRELIC.licenseSecretField));
     }
 
     setTaskAutoScaling();
