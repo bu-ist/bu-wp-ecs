@@ -17,15 +17,15 @@ const HOSTED_ZONE = 'example.com';
 const ANCHOR = `wp-test-cluster.${HOSTED_ZONE}`;
 const MAIL_ID = 'wp-p-mail-testlandscape';
 
-const buildStack = (mail?: Mail) => {
+const buildStack = (mail?: Mail, region = 'us-east-1') => {
   const app = new App();
-  const stack = new Stack(app, 'TestStack', { env: { account: ACCOUNT, region: 'us-east-1' } });
+  const stack = new Stack(app, 'TestStack', { env: { account: ACCOUNT, region } });
   stack.node.setContext('stack-parms', {
     STACK_ID: 'wp-p',
     TYPE: 'cloudfront',
     PREFIXES: { wordpress: 'wp', s3proxy: 'sigv4', rds: 'rds' },
     ACCOUNT,
-    REGION: 'us-east-1',
+    REGION: region,
     AUTOSCALING: false,
     DNS: {
       hostedZone: HOSTED_ZONE,
@@ -65,7 +65,7 @@ const buildStack = (mail?: Mail) => {
   return stack;
 };
 
-const synth = (mail?: Mail): Template => Template.fromStack(buildStack(mail));
+const synth = (mail?: Mail, region?: string): Template => Template.fromStack(buildStack(mail, region));
 
 const configurationSetLogicalId = (template: Template): string =>
   Object.keys(template.findResources('AWS::SES::ConfigurationSet'))[0];
@@ -156,10 +156,12 @@ describe('MailConstruct', () => {
       .toBe('team@example.com');
   });
 
-  it('sends through the region MAIL names, for both the container and the identity grant', () => {
-    const template = synth({ region: 'us-west-2' });
+  it('sends through the stack\'s region, for the container, the identity and the configuration set', () => {
+    const template = synth({}, 'us-west-2');
     expect(wordpressEnv(template).BU_SES_REGION).toBe('us-west-2');
     const [ { statement } ] = sesStatements(template);
-    expect(JSON.stringify(statement.Resource)).toContain(`:ses:us-west-2:${ACCOUNT}:identity/bu.edu`);
+    const resources = JSON.stringify(statement.Resource);
+    expect(resources).toContain(`:ses:us-west-2:${ACCOUNT}:identity/bu.edu`);
+    expect(resources).toContain(`:ses:us-west-2:${ACCOUNT}:configuration-set/`);
   });
 });

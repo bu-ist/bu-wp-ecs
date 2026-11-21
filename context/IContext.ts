@@ -105,12 +105,10 @@ export interface JobRunner {
   enabled?: boolean;
 }
 
-/** WordPress sends mail through Amazon SES as bu.edu, on the task role. Omit and nothing is built. */
+/** WordPress sends mail through Amazon SES in the stack's region, as bu.edu, on the task role. Omit and nothing is built. */
 export interface Mail {
   /** Address that receives every message in place of its recipients. Set it on non-production clusters. */
   redirectTo?: string;
-  /** SES region to send through. Defaults to us-east-1. */
-  region?: string;
 }
 
 export interface Prefixes {
