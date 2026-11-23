@@ -31,7 +31,7 @@ export class MailConstruct extends Construct {
     const { wordpress, mail: { redirectTo } } = props;
     const { taskDefinition } = wordpress.fargateService;
 
-    // Suppression and event publishing are set on this configuration set, not the account, which php-bin shares.
+    // Suppression and event publishing are set on this configuration set.
     const configurationSet = new ConfigurationSet(this, 'configuration-set', {
       configurationSetName: id,
       suppressionReasons: SuppressionReasons.BOUNCES_AND_COMPLAINTS,
