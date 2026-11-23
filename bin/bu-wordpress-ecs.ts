@@ -7,6 +7,7 @@ import { CloudfrontContext, DEPLOYMENT_TYPES, IContext, SecretFieldNames } from 
 import { checkIamServerCertificate } from '../lib/Certificate';
 import { ContextLog } from '../context/ContextLog';
 import { JobRunnerConstruct } from '../lib/JobRunner';
+import { MailConstruct } from '../lib/Mail';
 import { BuWordpressRdsConstruct as RdsConstruct } from '../lib/Rds';
 import { SecretsManagerSecret } from '../lib/Secret';
 import { BU_NameTagAspect, TaggingAspect } from '../lib/Tagging';
@@ -199,6 +200,13 @@ const ignoreRoute53 = async (context:CloudfrontContext): Promise<boolean> => {
   if(context.JOBRUNNER) {
     new JobRunnerConstruct(stack, `${STACK_ID}-jobs-${Landscape}`, {
       wordpress: ecs, jobRunner: context.JOBRUNNER
+    });
+  }
+
+  // Add optional SES mail sending if specified in the context.
+  if(context.MAIL) {
+    new MailConstruct(stack, `${STACK_ID}-mail-${Landscape}`, {
+      wordpress: ecs, mail: context.MAIL
     });
   }
 
